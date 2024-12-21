@@ -4,10 +4,14 @@ for p in python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-
  sudo apt install -y $p
 done
 
-cd
-git clone https://github.com/hifiberry/hifiberry-dsp
-cd hifiberry-dsp
-sudo python3 ./setup.py install 
+# cd
+# git clone https://github.com/hifiberry/hifiberry-dsp
+# cd hifiberry-dsp
+
+sudo python3 -m venv .venv
+source .venv/bin/activate
+sudo pip3 install -e .
+# sudo python3 ./setup.py install 
 
 for i in sigmatcp; do
  sudo systemctl stop $i
@@ -22,6 +26,8 @@ sudo mkdir ~/.dsptoolkit
 # Create systemd config for the TCP server
 LOC=`which sigmatcpserver`
 
+echo "installing sigmatcp service at $LOC"
+
 cat <<EOT >/tmp/sigmatcp.service
 [Unit]
 Description=SigmaTCP Server for HiFiBerry DSP
@@ -29,7 +35,7 @@ Wants=network-online.target
 After=network.target network-online.target
 [Service]
 Type=simple
-ExecStart=$LOC --localhost --alsa
+ExecStart=$LOC --localhost --alsa -v
 StandardOutput=journal
 [Install]
 WantedBy=multi-user.target

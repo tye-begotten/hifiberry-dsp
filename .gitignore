@@ -11,3 +11,4 @@ tmp
 /update
 build
 dist
+.venv

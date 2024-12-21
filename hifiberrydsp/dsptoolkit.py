@@ -53,12 +53,7 @@ from hifiberrydsp.parser.xmlprofile import  \
     ATTRIBUTE_MUTE_REG, ATTRIBUTE_TONECONTROL_FILTER_LEFT, \
     ATTRIBUTE_TONECONTROL_FILTER_LEFT, \
     REGISTER_ATTRIBUTES, XmlProfile, ATTRIBUTE_TONECONTROL_FILTER_RIGHT
-from hifiberrydsp.server.constants import COMMAND_PROGMEM, \
-    COMMAND_PROGMEM_RESPONSE, COMMAND_XML, COMMAND_XML_RESPONSE, \
-    COMMAND_STORE_DATA, COMMAND_RESTORE_DATA, \
-    COMMAND_DATAMEM, COMMAND_DATAMEM_RESPONSE, \
-    COMMAND_GPIO, COMMAND_GPIO_RESPONSE, \
-    GPIO_READ, GPIO_WRITE, GPIO_RESET, GPIO_SELFBOOT
+from hifiberrydsp.server.constants import *
 #    ZEROCONF_TYPE
 from hifiberrydsp.parser.settings import SettingsFile
 from hifiberrydsp.parser.rew import REWParser
@@ -423,6 +418,7 @@ class CommandLine():
             "get-xml": self.cmd_get_xml,
             "get-prog": self.cmd_get_prog,
             "get-meta": self.cmd_get_meta,
+            "erase-prog": self.cmd_erase_prog,
             "mute": self.cmd_mute,
             "unmute": self.cmd_unmute,
             "get-samplerate": self.cmd_samplerate,
@@ -800,7 +796,10 @@ for more documentation visit https://github.com/hifiberry/hifiberry-dsp/blob/mas
     def cmd_get_prog(self):
         mem = self.dsptk.generic_request(COMMAND_PROGMEM,
                                          COMMAND_PROGMEM_RESPONSE)
-        print(mem.decode("utf-8", errors="replace"))
+        if mem == None or len(mem) == 0:
+            print("no program memory returned, either SPI read failed or program memory has been erased")
+        else:
+            print(mem.decode("utf-8", errors="replace"))
 
     def cmd_get_Data(self):
         mem = self.dsptk.generic_request(COMMAND_DATAMEM,
@@ -812,6 +811,10 @@ for more documentation visit https://github.com/hifiberry/hifiberry-dsp/blob/mas
             attribute = self.args.parameters[0]
         value = self.dsptk.sigmatcp.request_metadata(attribute)
         print(value)
+        
+    def cmd_erase_prog(self):
+        print("requesting erase of program memory...")
+        self.dsptk.sigmatcp.erase_request(COMMAND_PROGMEM)
 
     def cmd_mute(self):
         if self.dsptk.mute(True):
