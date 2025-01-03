@@ -1,55 +1,114 @@
-#!/bin/sh
-sudo apt update
-for p in python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-dev libxslt-dev python3-dev git gcc alsa-utils; do
- sudo apt install -y $p
-done
+#!/bin/bash
 
-# cd
-# git clone https://github.com/hifiberry/hifiberry-dsp
-# cd hifiberry-dsp
+if [[ -z "$TYEFI_ROOT" ]]; then
+    echo "TYEFI_ROOT is not set"
+    echo "is $PWD the root of the tyefi project? (y/n)"
+    read -r ANSWER
+    if [[ "$ANSWER" == "y" ]]; then
+        echo "continuing install, please set TYEFI_ROOT in .bashrc or other environment file"
+        export TYEFI_ROOT=$PWD
+    else
+        echo "aborting install, please set TYEFI_ROOT to the root of the tyefi project"
+        exit 1
+    fi
+fi
 
-sudo python3 -m venv .venv
-source .venv/bin/activate
-sudo pip3 install -e .
-# sudo python3 ./setup.py install 
 
-for i in sigmatcp; do
- sudo systemctl stop $i
- sudo systemctl disable $i
-done
+echo "installing apt dependencies"
+
+sudo apt update | sudo apt upgrade
+sudo apt install python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-dev libxslt-dev python3-dev git gcc alsa-utils
+# for p in python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-dev libxslt-dev python3-dev git gcc alsa-utils; do
+#     sudo apt install -y $p
+# done
+
+
+DSPTOOLKIT_ROOT="$TYEFI_ROOT/lib/hifiberry/dsptoolkit"
+
+echo "TYEFI_ROOT set to $TYEFI_ROOT"
+echo "DSPTOOLKIT_ROOT set to $DSPTOOLKIT_ROOT"
+
+
+
+if [[ ! -d "$TYEFI_ROOT/.venv" ]]; then
+    echo "installing python virtual environment"
+    sudo python3 -m venv .venv
+else
+    echo "python virtual environment already exists"
+fi
+
+PY_BIN="$TYEFI_ROOT/.venv/bin"
+
+echo "activating python virtual environment"
+source "$PY_BIN/activate"
+
+echo "installing dsptoolkit"
+sudo "$TYEFI_ROOT/.venv/bin/pip3" install -e "$DSPTOOLKIT_ROOT"
+
 
 sudo mkdir -p /var/lib/hifiberry
 
-LOC=`which dsptoolkit`
-sudo mkdir ~/.dsptoolkit
+BIN="$TYEFI_ROOT/lib/hifiberry/dsptoolkit/bin"
+ANSWER="y"
 
-# Create systemd config for the TCP server
-LOC=`which sigmatcpserver`
+if [[ -f /lib/systemd/system/sigmatcp.service ]]; then
+    echo "sigmatcp service already exists, would you like to remove it? (y/n)"
+    read -r ANSWER
 
-echo "installing sigmatcp service at $LOC"
+    if [[ "$ANSWER" == "y" ]]; then
+        echo "removing existing sigmatcp service"
+        for i in sigmatcp; do
+            sudo systemctl stop $i
+            sudo systemctl disable $i
+        done
+        sudo rm /lib/systemd/system/sigmatcp.service
+    fi
+fi
 
-cat <<EOT >/tmp/sigmatcp.service
+if [[ "$ANSWER" == "y" ]]; then
+    echo "installing sigmatcp service at $BIN/sigmatcpserver"
+
+    cat <<EOT >/tmp/sigmatcp.service
 [Unit]
 Description=SigmaTCP Server for HiFiBerry DSP
 Wants=network-online.target
 After=network.target network-online.target
 [Service]
 Type=simple
-ExecStart=$LOC --localhost --alsa -v
+ExecStart="$PY_BIN/python3" "$BIN/sigmatcpserver" --alsa -v
 StandardOutput=journal
 [Install]
 WantedBy=multi-user.target
 EOT
 
-sudo mv /tmp/sigmatcp.service /lib/systemd/system/sigmatcp.service
+    sudo mv /tmp/sigmatcp.service /lib/systemd/system/sigmatcp.service
 
-sudo systemctl daemon-reload
+    sudo systemctl daemon-reload
 
-for i in sigmatcp; do
- sudo systemctl start $i
- sudo systemctl enable $i
-done
+    for i in sigmatcp; do
+        sudo systemctl start $i
+        sudo systemctl enable $i
+    done
+else
+    echo "skipping sigmatcp server install"
+fi
 
-cat /boot/config.txt | grep -v "dtparam=spi" >> /tmp/config.txt
+
+
+CFG_PATH=/boot/config.txt
+
+if [[ ! -f "$CFG_PATH" ]]; then
+    CFG_PATH=/boot/firmware/config.txt
+
+    if [[ ! -f "$CFG_PATH" ]]; then
+        echo "config.txt not found at /boot/config.txt or /boot/firmware/config.txt"
+        echo "please manually add 'dtparam=spi=on' to the config.txt file"
+        exit 1
+    fi
+fi
+
+echo "updating $CFG_PATH with 'dtparam=spi=on'"
+
+cat "$CFG_PATH" | grep -v "dtparam=spi" >> /tmp/config.txt
 echo "dtparam=spi=on" >> /tmp/config.txt
-sudo mv /tmp/config.txt /boot/config.txt
+sudo mv /tmp/config.txt "$CFG_PATH"
