@@ -17,7 +17,7 @@ fi
 echo "installing apt dependencies"
 
 sudo apt update | sudo apt upgrade
-sudo apt install python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-dev libxslt-dev python3-dev git gcc alsa-utils
+sudo apt install -y python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-dev libxslt-dev python3-dev git gcc alsa-utils
 # for p in python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-dev libxslt-dev python3-dev git gcc alsa-utils; do
 #     sudo apt install -y $p
 # done
@@ -36,7 +36,7 @@ verbose "DSPTOOLKIT_ROOT set to $DSPTOOLKIT_ROOT"
 
 
 # install python venv separate from tyefi since it has conflicting dependencies (RPi.GPIO)
-PY_ENV="$DSPTOOLKIT_ROOT/.venv"
+PY_ENV="$TYEFI_ROOT/.venv"
 PY_BIN="$PY_ENV/bin"
 
 
