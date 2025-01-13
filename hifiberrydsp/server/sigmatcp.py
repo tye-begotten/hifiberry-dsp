@@ -47,6 +47,9 @@ from hifiberrydsp import datatools
 
 from hifiberrydsp.server.constants import *
 import hifiberrydsp
+from beget.core.config import Envars
+from beget.core.fs import *
+
 
 # URL to notify on DSP program updates
 this = sys.modules[__name__]
@@ -54,30 +57,37 @@ this.notify_on_updates = None
 this.command_after_startup = None
 this.dsp=None
 
+TYEFI_ROOT = os.environ["TYEFI_ROOT"]
+cfg = Envars(f"{TYEFI_ROOT}/.env")
+file_store_root = path(cfg.get("DSP_FILE_STORE_ROOT", f"{TYEFI_ROOT}/bin/dsp"))
 
 def parameterfile():
-    if (os.geteuid() == 0):
-        return "/var/lib/hifiberry/dspparameters.dat"
-    else:
-        return os.path.expanduser("~/.hifiberry/dspparameters.dat")
+    return file_store_root["dspparameters.dat"].absolute
+    
+    # if (os.geteuid() == 0):
+    #     return "/var/lib/hifiberry/dspparameters.dat"
+    # else:
+    #     return os.path.expanduser("~/.hifiberry/dspparameters.dat")
 
 
 def dspprogramfile():
-    if (os.geteuid() == 0):
-        logging.info(
-            "running as root, data will be stored in /var/lib/hifiberry")
-        mydir = "/var/lib/hifiberry"
-    else:
-        mydir = "~/.hifiberry"
-        logging.info(
-            "not running as root, data will be stored in ~/.hifiberry")
-    try:
-        if not os.path.isdir(mydir):
-            os.makedirs(mydir)
-    except Exception as e:
-        logging.error("can't create directory {} ({})", mydir, e)
+    return file_store_root["dspprogram.xml"].absolute
+    
+    # if (os.geteuid() == 0):
+    #     logging.info(
+    #         "running as root, data will be stored in /var/lib/hifiberry")
+    #     mydir = "/var/lib/hifiberry"
+    # else:
+    #     mydir = "~/.hifiberry"
+    #     logging.info(
+    #         "not running as root, data will be stored in ~/.hifiberry")
+    # try:
+    #     if not os.path.isdir(mydir):
+    #         os.makedirs(mydir)
+    # except Exception as e:
+    #     logging.error("can't create directory {} ({})", mydir, e)
 
-    return os.path.expanduser(mydir + "/dspprogram.xml")
+    # return os.path.expanduser(mydir + "/dspprogram.xml")
 
 
 def startup_notify():
@@ -99,7 +109,7 @@ class SigmaTCPHandler(BaseRequestHandler):
     dsp = adau145x.Adau145x
     dspprogramfile = dspprogramfile()
     parameterfile = parameterfile()
-    alsasync = None
+    alsasync: AlsaSync = None
     lgsoundsync = None
     updating = False
     xml = None
@@ -660,6 +670,7 @@ class SigmaTCPHandler(BaseRequestHandler):
 
     @staticmethod
     def program_checksum(cached=True):
+        
         if cached and SigmaTCPHandler.checksum is not None:
             logging.debug("using cached program checksum, "
                           "might not always be correct")
@@ -1000,13 +1011,13 @@ class SigmaTCPServerMain():
             this.dsp=""
             
         
-        if (self.restore):
-            try:
-                logging.info("restoring saved data memory")
-                SigmaTCPHandler.restore_data_memory()
-                SigmaTCPHandler.finish_update()
-            except IOError:
-                logging.info("no saved data found")
+        # if (self.restore):
+        #     try:
+        #         logging.info("restoring saved data memory")
+        #         SigmaTCPHandler.restore_data_memory()
+        #         SigmaTCPHandler.finish_update()
+        #     except IOError:
+        #         logging.info("no saved data found")
 
 #         logging.info("announcing via zeroconf")
 #         try:
@@ -1038,5 +1049,5 @@ class SigmaTCPServerMain():
 #        logging.info("removing from zeroconf")
 #        self.shutdown_zeroconf()
 
-        logging.info("saving DSP data memory")
-        SigmaTCPHandler.save_data_memory()
+        # logging.info("saving DSP data memory")
+        # SigmaTCPHandler.save_data_memory()

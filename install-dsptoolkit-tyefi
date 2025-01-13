@@ -35,7 +35,7 @@ verbose "TYEFI_ROOT set to $TYEFI_ROOT"
 verbose "DSPTOOLKIT_ROOT set to $DSPTOOLKIT_ROOT"
 
 
-# install python venv separate from tyefi since it has conflicting dependencies (RPi.GPIO)
+# install python venv separate from tyefi since it has conflicting dependencies (RPi.GPIO)?
 PY_ENV="$TYEFI_ROOT/.venv"
 PY_BIN="$PY_ENV/bin"
 
@@ -68,7 +68,7 @@ fi
 
 
 echo "installing dsptoolkit"
-sudo "$PY_BIN/pip3" install -e "$DSPTOOLKIT_ROOT"
+"$PY_BIN/pip3" install "$DSPTOOLKIT_ROOT"
 
 
 BIN="$DSPTOOLKIT_ROOT/bin"
@@ -89,24 +89,26 @@ ANSWER="y"
 # fi
 
 if [[ "$ANSWER" == "y" ]]; then
-    echo "installing sigmatcp service at $BIN/sigmatcpserver"
+    # exec_start="\"$PY_BIN/python3\" \"$BIN/sigmatcpserver\" -v"
+    echo "installing sigmatcp service: $TYEFI_ROOT/root/etc/systemd/system/sigmatcp.service"
 
-    cat <<EOT >/tmp/sigmatcp.service
-[Unit]
-Description=SigmaTCP Server for HiFiBerry DSP
-Wants=network-online.target
-After=network.target network-online.target
-[Service]
-Type=simple
-User=root
-Group=root
-ExecStart="$PY_BIN/python3" "$BIN/sigmatcpserver" --alsa -v
-StandardOutput=journal
-[Install]
-WantedBy=multi-user.target
-EOT
+#     cat <<EOT >/tmp/sigmatcp.service
+# [Unit]
+# Description=SigmaTCP Server for HiFiBerry DSP
+# Wants=network-online.target
+# After=network.target network-online.target
+# [Service]
+# Type=simple
+# User=tye
+# Group=tye
+# ExecStart=$exec_start
+# StandardOutput=journal
+# [Install]
+# WantedBy=multi-user.target
+# EOT
 
-    sudo mv /tmp/sigmatcp.service /lib/systemd/system/sigmatcp.service
+#     sudo mv /tmp/sigmatcp.service /lib/systemd/system/sigmatcp.service
+    sudo cp "$TYEFI_ROOT/root/etc/systemd/system/sigmatcp.service" /lib/systemd/system/sigmatcp.service
 
     sudo systemctl daemon-reload
 
