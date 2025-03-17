@@ -176,7 +176,8 @@ class XmlProfile():
                     self.eeprom.write_eeprom(page_address, data)
 
     def replace_eeprom_cells(self, replace_dict):
-
+        logging.info(f"replace_eeprom_cells: replacing memory_data with new dict({len(replace_dict)}): {replace_dict}")
+        
         # First calculate new EEPROM content
         new_eeprom = self.eeprom.replace_memory_data(replace_dict)
 
@@ -206,6 +207,7 @@ class XmlProfile():
                     action["#text"] = new_data_str
 
     def replace_ram_cells(self, replace_dict):
+        logging.info(f"replace_ram_cells: replacing memory_data with new dict({len(replace_dict)}): {replace_dict}")
 
         # Set this to true after the EEPROM programming has been detected
         eeprom_write_done = False

@@ -92,6 +92,13 @@ if [[ "$ANSWER" == "y" ]]; then
     # exec_start="\"$PY_BIN/python3\" \"$BIN/sigmatcpserver\" -v"
     echo "installing sigmatcp service: $TYEFI_ROOT/root/etc/systemd/system/sigmatcp.service"
 
+    echo "removing existing sigmatcp service"
+    for i in sigmatcp; do
+        sudo systemctl stop $i
+        sudo systemctl disable $i
+    done
+    sudo rm /lib/systemd/system/sigmatcp.service
+
 #     cat <<EOT >/tmp/sigmatcp.service
 # [Unit]
 # Description=SigmaTCP Server for HiFiBerry DSP
@@ -108,6 +115,7 @@ if [[ "$ANSWER" == "y" ]]; then
 # EOT
 
 #     sudo mv /tmp/sigmatcp.service /lib/systemd/system/sigmatcp.service
+    info "copying sigmatcp service from 'TYEFI_ROOT/root/etc/systemd/system/sigmatcp.service' to '/lib/systemd/system/sigmatcp.service'"
     sudo cp "$TYEFI_ROOT/root/etc/systemd/system/sigmatcp.service" /lib/systemd/system/sigmatcp.service
 
     sudo systemctl daemon-reload

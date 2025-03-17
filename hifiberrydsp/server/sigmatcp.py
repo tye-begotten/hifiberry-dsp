@@ -342,6 +342,7 @@ class SigmaTCPHandler(BaseRequestHandler):
 
     @staticmethod
     def read_xml_profile():
+        logging.info(f"reading XML profile form {SigmaTCPHandler.dspprogramfile}")
         SigmaTCPHandler.xml = XmlProfile(SigmaTCPHandler.dspprogramfile)
         cs = SigmaTCPHandler.xml.get_meta("checksum")
         logging.debug("checksum from XML: %s", cs)
@@ -361,20 +362,18 @@ class SigmaTCPHandler(BaseRequestHandler):
         if (checksum_xml is not None) and (checksum_xml != 0):
             if (checksum_xml != checksum_mem):
                 logging.error("checksums do not match, aborting")
-                SigmaTCPHandler.checksum_error = True
                 return
         else:
             logging.info("DSP profile doesn't have a checksum, "
                          "might be different from the program running now")
 
-        SigmaTCPHandler.checksum_error = False
 
     @staticmethod
     def get_checked_xml():
-        if not(SigmaTCPHandler.checksum_error):
-            if SigmaTCPHandler.xml is None:
-                SigmaTCPHandler.read_xml_profile()
+        if SigmaTCPHandler.xml is None:
+            SigmaTCPHandler.read_xml_profile()
 
+        if SigmaTCPHandler.xml:
             return SigmaTCPHandler.xml
         else:
             logging.debug("XML checksum error, ignoring XML file")
@@ -669,7 +668,7 @@ class SigmaTCPHandler(BaseRequestHandler):
         return memory[0:dsp.DATA_LENGTH]
 
     @staticmethod
-    def program_checksum(cached=True):
+    def program_checksum(cached=False):
         
         if cached and SigmaTCPHandler.checksum is not None:
             logging.debug("using cached program checksum, "

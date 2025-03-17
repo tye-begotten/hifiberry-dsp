@@ -1077,10 +1077,13 @@ for more documentation visit https://github.com/hifiberry/hifiberry-dsp/blob/mas
                 length -= 1
 
             print("storing {}".format(attribute))
-
-        xmlprofile.replace_eeprom_cells(replace)
-        xmlprofile.replace_ram_cells(replace)
-        self.write_back_xml(xmlprofile)
+        
+        if len(replace) > 0:
+            xmlprofile.replace_eeprom_cells(replace)
+            xmlprofile.replace_ram_cells(replace)
+            self.write_back_xml(xmlprofile)
+        else:
+            logging.warn("store_attributes: replace dict was empty")
 
     def main(self):
 
