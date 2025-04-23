@@ -1010,13 +1010,13 @@ class SigmaTCPServerMain():
             this.dsp=""
             
         
-        # if (self.restore):
-        #     try:
-        #         logging.info("restoring saved data memory")
-        #         SigmaTCPHandler.restore_data_memory()
-        #         SigmaTCPHandler.finish_update()
-        #     except IOError:
-        #         logging.info("no saved data found")
+        if (self.restore):
+            try:
+                logging.info("restoring saved data memory")
+                SigmaTCPHandler.restore_data_memory()
+                SigmaTCPHandler.finish_update()
+            except IOError:
+                logging.info("no saved data found")
 
 #         logging.info("announcing via zeroconf")
 #         try:
