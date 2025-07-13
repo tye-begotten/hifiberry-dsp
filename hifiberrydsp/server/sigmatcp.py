@@ -47,8 +47,8 @@ from hifiberrydsp import datatools
 
 from hifiberrydsp.server.constants import *
 import hifiberrydsp
-from beget.core.config import Envars
-from beget.core.fs import *
+from ty3.core.env import Envars
+from ty3.core.fs import *
 
 
 # URL to notify on DSP program updates
@@ -58,7 +58,7 @@ this.command_after_startup = None
 this.dsp=None
 
 TYEFI_ROOT = os.environ["TYEFI_ROOT"]
-cfg = Envars(f"{TYEFI_ROOT}/.env")
+cfg = Envars(f"{TYEFI_ROOT}/tyefi.env")
 file_store_root = path(cfg.get("DSP_FILE_STORE_ROOT", f"{TYEFI_ROOT}/bin/dsp"))
 
 def parameterfile():
