@@ -68,7 +68,8 @@ fi
 
 
 echo "installing dsptoolkit"
-"$PY_BIN/pip3" install "$DSPTOOLKIT_ROOT"
+py_install -u "$DSPTOOLKIT_ROOT/src"
+# "$PY_BIN/pip3" install "$DSPTOOLKIT_ROOT/src"
 
 
 BIN="$DSPTOOLKIT_ROOT/bin"
