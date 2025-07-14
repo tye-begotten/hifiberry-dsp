@@ -12,3 +12,8 @@ tmp
 build
 dist
 .venv
+*.tar.gz
+deb_dist
+beocreate-universal-10.xml
+update-clock
+.vscode/settings.json

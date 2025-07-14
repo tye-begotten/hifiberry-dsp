@@ -26,6 +26,7 @@ import os
 import sys
 import logging
 import hashlib
+import argparse
 
 from threading import Thread
 
@@ -40,16 +41,28 @@ from hifiberrydsp.hardware import adau145x
 from hifiberrydsp.hardware.spi import SpiHandler
 from hifiberrydsp.datatools import int_data
 from hifiberrydsp.parser.xmlprofile import \
-    XmlProfile, ATTRIBUTE_VOL_CTL, ATTRIBUTE_SPDIF_ACTIVE
+    XmlProfile, ATTRIBUTE_VOL_CTL, ATTRIBUTE_SPDIF_ACTIVE, \
+    get_default_dspprofile_path
 from hifiberrydsp.alsa.alsasync import AlsaSync
 from hifiberrydsp.lg.soundsync import SoundSync
 from hifiberrydsp import datatools
 
 from hifiberrydsp.server.constants import *
-import hifiberrydsp
 from ty3.core.env import Envars
 from ty3.core.fs import *
 
+from hifiberrydsp.server.constants import \
+    COMMAND_READ, COMMAND_READRESPONSE, COMMAND_WRITE, \
+    COMMAND_EEPROM_FILE, COMMAND_CHECKSUM, COMMAND_CHECKSUM_RESPONSE, \
+    COMMAND_WRITE_EEPROM_CONTENT, COMMAND_XML, COMMAND_XML_RESPONSE, \
+    COMMAND_STORE_DATA, COMMAND_RESTORE_DATA, COMMAND_GET_META, \
+    COMMAND_META_RESPONSE, COMMAND_PROGMEM, COMMAND_PROGMEM_RESPONSE, \
+    COMMAND_DATAMEM, COMMAND_DATAMEM_RESPONSE, \
+    COMMAND_GPIO, \
+    HEADER_SIZE, \
+    DEFAULT_PORT
+from hifiberrydsp.api.restapi import run_api  # Import the REST API server
+# import hifiberrydsp
 
 # URL to notify on DSP program updates
 this = sys.modules[__name__]
@@ -100,14 +113,12 @@ def startup_notify():
     logging.info("calling %s", this.command_after_startup)
     os.system(this.command_after_startup)
     
-    
 
 class SigmaTCPHandler(BaseRequestHandler):
 
     checksum = None
-    spi = SpiHandler()
     dsp = adau145x.Adau145x
-    dspprogramfile = dspprogramfile()
+    dspprogramfile = get_default_dspprofile_path()
     parameterfile = parameterfile()
     alsasync: AlsaSync = None
     lgsoundsync = None
@@ -342,7 +353,7 @@ class SigmaTCPHandler(BaseRequestHandler):
 
     @staticmethod
     def read_xml_profile():
-        logging.info(f"reading XML profile form {SigmaTCPHandler.dspprogramfile}")
+        logging.info("reading XML file %s", SigmaTCPHandler.dspprogramfile)
         SigmaTCPHandler.xml = XmlProfile(SigmaTCPHandler.dspprogramfile)
         cs = SigmaTCPHandler.xml.get_meta("checksum")
         logging.debug("checksum from XML: %s", cs)
@@ -407,9 +418,9 @@ class SigmaTCPHandler(BaseRequestHandler):
         addr = int.from_bytes(data[10:12], byteorder='big')
         length = int.from_bytes(data[6:10], byteorder='big')
         
-        logging.debug("Handle read %s/%s",addr,length)
+        logging.debug("Handle read %s/%s", addr, length)
 
-        spi_response = SigmaTCPHandler.spi.read(addr, length)
+        spi_response = adau145x.Adau145x.read_memory(addr, length)
         logging.debug("read {} bytes from {}".format(length, addr))
 
         res = SigmaTCPHandler._response_packet(COMMAND_READRESPONSE,
@@ -440,7 +451,7 @@ class SigmaTCPHandler(BaseRequestHandler):
 
         logging.debug("writing {} bytes to {}".format(length, addr))
         memdata = data[14:]
-        res = SigmaTCPHandler.spi.write(addr, memdata)
+        res = adau145x.Adau145x.write_memory(addr, memdata)
 
         if addr == SigmaTCPHandler.dsp.HIBERNATE_REGISTER and \
                 SigmaTCPHandler.updating and memdata == b'\00\00':
@@ -452,57 +463,15 @@ class SigmaTCPHandler(BaseRequestHandler):
 
     @staticmethod
     def write_eeprom_content(xmldata):
-
-        logging.info("writing XML file: %s", xmldata)
-
-        try:
-            doc = xmltodict.parse(xmldata)
-
-            SigmaTCPHandler.prepare_update()
-            for action in doc["ROM"]["page"]["action"]:
-                instr = action["@instr"]
-
-                if instr == "writeXbytes":
-                    addr = int(action["@addr"])
-                    paramname = action["@ParamName"]
-                    data = []
-                    for d in action["#text"].split(" "):
-                        value = int(d, 16)
-                        data.append(value)
-
-                    logging.debug("writeXbytes %s %s", addr, len(data))
-                    SigmaTCPHandler.spi.write(addr, data)
-
-                    # Sleep after erase operations
-                    if ("g_Erase" in paramname):
-                        logging.debug(
-                            "found erase command, waiting 10 seconds to finish")
-                        time.sleep(10)
-
-                    # Delay after a page write
-                    if ("Page_" in paramname):
-                        logging.debug(
-                            "found page write command, waiting 0.5 seconds to finish")
-                        time.sleep(0.5)
-
-                if instr == "delay":
-                    logging.debug("delay")
-                    time.sleep(1)
-
+        logging.info("writing XML file through Adau145x implementation")
+        result = adau145x.Adau145x.write_eeprom_content(xmldata)
+        
+        # After the EEPROM write is done, set internal state as needed
+        if result:  # Success
             SigmaTCPHandler.finish_update()
-
-            # Write current DSP profile
-            with open(SigmaTCPHandler.dspprogramfile, "w+b") as dspprogram:
-                if (isinstance(xmldata, str)):
-                    xmldata = xmldata.encode("utf-8")
-                dspprogram.write(xmldata)
-
-        except Exception as e:
-            logging.error("exception during EEPROM write: %s", e)
-            logging.exception(e)
-            return b'\00'
-
-        return b'\01'
+            return b'\01'  # Convert True to binary 1
+        else:
+            return b'\00'  # Convert False to binary 0
 
     @staticmethod
     def write_eeprom_file(filename):
@@ -517,9 +486,8 @@ class SigmaTCPHandler(BaseRequestHandler):
     @staticmethod
     def save_data_memory():
         logging.info("store: getting checksum")
-        checksum = SigmaTCPHandler.program_checksum()
-        memory = SigmaTCPHandler.get_memory_block(SigmaTCPHandler.dsp.DATA_ADDR,
-                                                  SigmaTCPHandler.dsp.DATA_LENGTH)
+        checksum = adau145x.Adau145x.calculate_program_checksum(cached=True)
+        memory = adau145x.Adau145x.get_data_memory()
         logging.info("store: writing memory dump to file")
         SigmaTCPHandler.store_parameters(checksum, memory)
 
@@ -527,7 +495,7 @@ class SigmaTCPHandler(BaseRequestHandler):
     def restore_data_memory():
 
         logging.info("restore: checking checksum")
-        checksum = SigmaTCPHandler.program_checksum(cached=False)
+        checksum = adau145x.Adau145x.calculate_program_checksum(cached=False)
         memory = SigmaTCPHandler.restore_parameters(checksum)
 
         if memory is None:
@@ -543,81 +511,21 @@ class SigmaTCPHandler(BaseRequestHandler):
                           dsp.DATA_LENGTH * dsp.WORD_LENGTH)
 
         # Make sure DSP isn't running for this operation
-        SigmaTCPHandler._kill_dsp()
-        SigmaTCPHandler.spi.write(dsp.DATA_ADDR, memory)
+        adau145x.Adau145x.kill_dsp()
+        adau145x.Adau145x.write_memory(dsp.DATA_ADDR, memory)
         # Restart the core
-        SigmaTCPHandler._start_dsp()
+        adau145x.Adau145x.start_dsp()
 
     @staticmethod
     def get_memory_block(addr, length):
-        block_size = 2048
-
-        dsp = SigmaTCPHandler.dsp
-
-        logging.debug("reading %s bytes from memory",
-                      length * dsp.WORD_LENGTH)
-
-        # Must kill the core to read program memory, but it doesn't
-        # hurt doing it also for other memory types :(
-        SigmaTCPHandler._kill_dsp()
-
-        memory = bytearray()
-
-        while len(memory) < length * dsp.WORD_LENGTH:
-            logging.debug("reading memory code block from addr %s", addr)
-            data = SigmaTCPHandler.spi.read(addr, block_size)
-            # logging.debug("%s", data)
-            memory += data
-            addr = addr + int(block_size / dsp.WORD_LENGTH)
-
-        # Restart the core
-        SigmaTCPHandler._start_dsp()
-
-        return memory[0:length * dsp.WORD_LENGTH]
+        return adau145x.Adau145x.get_memory_block(addr, length)
 
     @staticmethod
     def get_program_memory(erased=False):
         '''
-        Calculate a checksum of the program memory of the DSP
+        Get the program memory from the DSP
         '''
-        dsp = SigmaTCPHandler.dsp
-        memory = SigmaTCPHandler.get_memory_block(dsp.PROGRAM_ADDR,
-                                                  dsp.PROGRAM_LENGTH)
-
-        end_index = memory.find(dsp.PROGRAM_END_SIGNATURE)
-
-        if end_index < 0:
-            memsum = 0
-            for i in memory:
-                memsum = memsum + i
-
-            if (memsum > 0):
-                if erased:
-                    logging.error(f"program memory should be erased but we found data, memsum={memsum}")
-                    return None
-                else:
-                    logging.error("couldn't find program end signature," +
-                                " using full program memory")
-                end_index = dsp.PROGRAM_LENGTH - dsp.WORD_LENGTH
-            else:
-                if erased:
-                    logging.info("program memory appears to be properly erased")
-                else:
-                    logging.error("SPI returned only zeros - communication"
-                                "error")
-                    return None
-        else:
-            if erased:
-                logging.error(f"program memory should be erased but we found end signature at {end_index}")
-                return None
-            end_index = end_index + len(dsp.PROGRAM_END_SIGNATURE)
-
-        if not erased:
-            logging.debug("Program lengths = %s words",
-                        end_index / dsp.WORD_LENGTH)
-
-        # logging.debug("%s", memory[0:end_index])
-        return memory[0:end_index]
+        return adau145x.Adau145x.get_program_memory(erased)
 
     @staticmethod
     def erase_program_memory():
@@ -650,44 +558,16 @@ class SigmaTCPHandler(BaseRequestHandler):
         else:
             return (SigmaTCPHandler.dsp.PROGRAM_ADDR, SigmaTCPHandler.dsp.PROGRAM_LENGTH * SigmaTCPHandler.dsp.WORD_LENGTH)
         
-        
-        
-
     @staticmethod
     def get_data_memory():
         '''
-        Calculate a checksum of the program memory of the DSP
+        Get the data memory from the DSP
         '''
-        dsp = SigmaTCPHandler.dsp
-        memory = SigmaTCPHandler.get_memory_block(dsp.DATA_ADDR,
-                                                  dsp.DATA_LENGTH)
-        logging.debug("Data lengths = %s words",
-                      dsp.DATA_LENGTH / dsp.WORD_LENGTH)
-
-        # logging.debug("%s", memory[0:end_index])
-        return memory[0:dsp.DATA_LENGTH]
+        return adau145x.Adau145x.get_data_memory()
 
     @staticmethod
     def program_checksum(cached=False):
-        
-        if cached and SigmaTCPHandler.checksum is not None:
-            logging.debug("using cached program checksum, "
-                          "might not always be correct")
-            return SigmaTCPHandler.checksum
-
-        data = SigmaTCPHandler.get_program_memory()
-        m = hashlib.md5()
-        try:
-            m.update(data)
-        except:
-            logging.error("Can't calculate checksum from %s", data)
-            return None
-
-        logging.debug("length: %s, digest: %s", len(data), m.digest())
-
-        logging.info("caching program memory checksum")
-        SigmaTCPHandler.checksum = m.digest()
-        return SigmaTCPHandler.checksum
+        return adau145x.Adau145x.calculate_program_checksum(cached=cached)
 
     @staticmethod
     def _list_str(int_list):
@@ -713,36 +593,11 @@ class SigmaTCPHandler(BaseRequestHandler):
 
     @staticmethod
     def _kill_dsp():
-        logging.debug("killing DSP core")
-        dsp = SigmaTCPHandler.dsp
-        spi = SigmaTCPHandler.spi
-
-        spi.write(dsp.HIBERNATE_REGISTER,
-                  int_data(1, dsp.REGISTER_WORD_LENGTH))
-        time.sleep(0.0001)
-        spi.write(dsp.KILLCORE_REGISTER,
-                  int_data(0, dsp.REGISTER_WORD_LENGTH))
-        time.sleep(0.0001)
-        spi.write(dsp.KILLCORE_REGISTER,
-                  int_data(1, dsp.REGISTER_WORD_LENGTH))
+        adau145x.Adau145x.kill_dsp()
 
     @staticmethod
     def _start_dsp():
-        logging.debug("starting DSP core")
-        dsp = SigmaTCPHandler.dsp
-        spi = SigmaTCPHandler.spi
-
-        spi.write(dsp.KILLCORE_REGISTER,
-                  int_data(0, dsp.REGISTER_WORD_LENGTH))
-        time.sleep(0.0001)
-        spi.write(dsp.STARTCORE_REGISTER,
-                  int_data(0, dsp.REGISTER_WORD_LENGTH))
-        time.sleep(0.0001)
-        spi.write(dsp.STARTCORE_REGISTER,
-                  int_data(1, dsp.REGISTER_WORD_LENGTH))
-        time.sleep(0.0001)
-        spi.write(dsp.HIBERNATE_REGISTER,
-                  int_data(0, dsp.REGISTER_WORD_LENGTH))
+        adau145x.Adau145x.start_dsp()
 
     @staticmethod
     def store_parameters(checksum, memory):
@@ -766,6 +621,7 @@ class SigmaTCPHandler(BaseRequestHandler):
         Call this method if the DSP program might change soon
         '''
         logging.info("preparing for memory update")
+        adau145x.Adau145x.clear_checksum_cache()
         SigmaTCPHandler.checksum = None
         SigmaTCPHandler.update_alsasync(clear=True)
         SigmaTCPHandler.update_lgsoundsync(clear=True)
@@ -865,10 +721,16 @@ class SigmaTCPServerMain():
         
         params = self.parse_config()
 
-        if params["localhost"]:
-            self.server = SigmaTCPServer(server_address=("localhost", DEFAULT_PORT))
+        # Determine the host to bind to
+        if params["bind_address"]:
+            bind_host = params["bind_address"]
+        elif params["localhost"]:
+            bind_host = "localhost"
         else:
-            self.server = SigmaTCPServer()
+            bind_host = "0.0.0.0"
+
+        logging.info(f"Starting SigmaTCP server on {bind_host}:{DEFAULT_PORT}")
+        self.server = SigmaTCPServer(server_address=(bind_host, DEFAULT_PORT))
 
         if params["alsa"]:
             logging.info("initializing ALSA mixer control %s", alsa_mixer_name)
@@ -908,90 +770,56 @@ class SigmaTCPServerMain():
         if params["erase"]:
             self.erase = True
 
+        self.params = params
         
     def parse_config(self):
         config = configparser.ConfigParser()
         config.optionxform = lambda option: option
-    
+
         config.read("/etc/sigmatcp.conf")
 
         params = {}
-    
-        try:
-            params["alsa"] = config.getboolean("server","alsa")
-        except:
-            params["alsa"] = False
-            
-        if  "--alsa" in sys.argv:
-            params["alsa"] = True
 
-        try:            
-            params["lgsoundsync"] = config.getboolean("server","lgsoundsync") 
-        except:
-            params["lgsoundsync"] = False
-            
-        if "--lgsoundsync" in sys.argv:
-            params["lgsoundsync"] = True
-            
-        if "--localhost" in sys.argv:
-            params["localhost"] = True
-        else:
-            params["localhost"] = False
+        # Parse command-line arguments
+        parser = argparse.ArgumentParser(description="SigmaTCP Server")
+        parser.add_argument("--alsa", action="store_true", help="Enable ALSA volume control")
+        parser.add_argument("--lgsoundsync", action="store_true", help="Enable LG Sound Sync")
+        parser.add_argument("--enable-rest", action="store_true", help="Enable REST API server")
+        parser.add_argument("--disable-tcp", action="store_true", help="Disable SigmaTCP server (only useful with --enable-rest)")
+        parser.add_argument("--store", action="store_true", help="Store data memory to a file on exit")
+        parser.add_argument("--restore", action="store_true", help="Restore saved data memory")
+        parser.add_argument("--localhost", action="store_true", help="Bind to localhost only")
+        parser.add_argument("--bind-address", type=str, default=None, help="Specify IP address to bind to")
+        parser.add_argument("--erase", type=str, default=False, help="If set, erase EEPROM program memory on startup")
+        parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
+        args = parser.parse_args()
+
+        params["alsa"] = args.alsa
+        params["lgsoundsync"] = args.lgsoundsync
+        params["enable_rest"] = args.enable_rest
+        params["disable_tcp"] = args.disable_tcp
+        params["store"] = args.store
+        params["restore"] = args.restore
+        params["verbose"] = args.verbose
+        params["localhost"] = args.localhost
+        params["bind_address"] = args.bind_address
+        params["erase"] = args.erase
 
         try:
-            this.command_after_startup = config.get("server","command_after_startup")
+            this.command_after_startup = config.get("server", "command_after_startup")
         except:
             this.command_after_startup = None
 
-        try:            
-            this.notify_on_updates = config.get("server","notify_on_updates") 
+        try:
+            this.notify_on_updates = config.get("server", "notify_on_updates")
         except:
             this.notify_on_updates = None
-            
 
+        # Override any previous logging configuration
+        logging.basicConfig(level=logging.DEBUG if params["verbose"] else logging.INFO, force=True)
 
-        if "--restore" in sys.argv:
-            params["restore"] = True
-        else:
-            params["restore"] = False
-            
-        if "--erase" in sys.argv:
-            params["erase"] = True
-        else:
-            params["erase"] = False
-            
         return params
             
-
-#     def announce_zeroconf(self):
-#         desc = {'name': 'SigmaTCP',
-#                 'vendor': 'HiFiBerry',
-#                 'version': hifiberrydsp.__version__}
-#         hostname = socket.gethostname()
-#         try:
-#             ip = socket.gethostbyname(hostname)
-#         except Exception:
-#             logging.error("can't get IP for hostname %s, "
-#                           "not initialising Zeroconf",
-#                           hostname)
-#             return
-# 
-#         self.zeroconf_info = ServiceInfo(ZEROCONF_TYPE,
-#                                          "{}.{}".format(
-#                                              hostname, ZEROCONF_TYPE),
-#                                          socket.inet_aton(ip),
-#                                          DEFAULT_PORT, 0, 0, desc)
-#         self.zeroconf = Zeroconf()
-#         self.zeroconf.register_service(self.zeroconf_info)
-# 
-#     def shutdown_zeroconf(self):
-#         if self.zeroconf is not None and self.zeroconf_info is not None:
-#             self.zeroconf.unregister_service(self.zeroconf_info)
-# 
-#             self.zeroconf_info = None
-#             self.zeroconf.close()
-#             self.zeroconf = None
-
     def run(self):
         
         if self.erase:
@@ -1018,26 +846,41 @@ class SigmaTCPServerMain():
             except IOError:
                 logging.info("no saved data found")
 
-#         logging.info("announcing via zeroconf")
-#         try:
-#             self.announce_zeroconf()
-#         except Exception as e:
-#             logging.debug("exception while initialising Zeroconf")
-#             logging.exception(e)
-
         logging.debug("done")
         
         logging.info(this.command_after_startup)
         notifier_thread = Thread(target = startup_notify)
         notifier_thread.start()
         
+        if self.params.get("enable_rest"):
+            # Use the same bind address for REST API
+            if self.params.get("bind_address"):
+                rest_host = self.params.get("bind_address")
+            elif self.params.get("localhost"):
+                rest_host = "localhost"
+            else:
+                rest_host = "0.0.0.0"
+                
+            logging.info(f"Starting REST API server on {rest_host}:13141")
+            rest_thread = Thread(target=run_api, kwargs={"host": rest_host, "port": 13141})
+            rest_thread.daemon = True
+            rest_thread.start()
+
         try:
-            if not(self.abort):
+            if not(self.abort) and not(self.params.get("disable_tcp")):
                 logging.info("starting TCP server")
                 self.server.serve_forever()
+            elif self.params.get("disable_tcp") and self.params.get("enable_rest"):
+                logging.info("TCP server disabled, running REST API only")
+                # Keep main thread alive for REST API
+                while True:
+                    time.sleep(1)
+            else:
+                logging.warning("Both TCP server and REST API are disabled. Nothing to do!")
         except KeyboardInterrupt:
             logging.info("aborting ")
-            self.server.server_close()
+            if not self.params.get("disable_tcp"):
+                self.server.server_close()
 
         if SigmaTCPHandler.alsasync is not None:
             SigmaTCPHandler.alsasync.finish()
@@ -1045,8 +888,9 @@ class SigmaTCPServerMain():
         if SigmaTCPHandler.lgsoundsync is not None:
             SigmaTCPHandler.lgsoundsync.finish()
 
-#        logging.info("removing from zeroconf")
-#        self.shutdown_zeroconf()
-
-        # logging.info("saving DSP data memory")
-        # SigmaTCPHandler.save_data_memory()
+        if self.params.get("store"):
+            try:
+                logging.info("saving DSP data memory")
+                SigmaTCPHandler.save_data_memory()
+            except Exception as e:
+                logging.error("Error saving DSP data memory: %s", e)
