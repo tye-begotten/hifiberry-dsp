@@ -284,7 +284,7 @@ class Adau145x():
         return memory[0:length * Adau145x.WORD_LENGTH]
     
     @staticmethod
-    def get_program_memory():
+    def get_program_memory(erased=False):
         '''
         Read the program memory from the DSP including program end detection
         
@@ -307,18 +307,30 @@ class Adau145x():
                 memsum = memsum + i
 
             if (memsum > 0):
-                logging.error("couldn't find program end signature," +
-                              " using full program memory")
-                end_index = Adau145x.PROGRAM_LENGTH - Adau145x.WORD_LENGTH
+                if erased:
+                    logging.error(f"program memory should be erased but we found data, memsum={memsum}")
+                    return None
+                else:
+                    logging.error("couldn't find program end signature," +
+                                " using full program memory")
+                    end_index = Adau145x.PROGRAM_LENGTH - Adau145x.WORD_LENGTH
             else:
-                logging.error("SPI returned only zeros - communication "
-                              "error")
-                return None
+                if erased:
+                    logging.info("program memory appears to be properly erased")
+                else:
+                    logging.error("SPI returned only zeros - communication "
+                                "error")
+                    return None
         else:
-            end_index = end_index + len(Adau145x.PROGRAM_END_SIGNATURE)
+            if erased:
+                logging.error(f"program memory should be erased but we found end signature at {end_index}")
+                return None
+            else:
+                end_index = end_index + len(Adau145x.PROGRAM_END_SIGNATURE)
 
-        logging.debug("Program lengths = %s words",
-                      end_index / Adau145x.WORD_LENGTH)
+        if not erased:
+            logging.debug("Program lengths = %s words",
+                        end_index / Adau145x.WORD_LENGTH)
 
         return memory[0:end_index]
     

@@ -1,0 +1,149 @@
+#!/bin/bash
+
+if [[ -z "$TYEFI_ROOT" ]]; then
+    echo "TYEFI_ROOT is not set"
+    echo "is $PWD the root of the tyefi project? (y/n)"
+    read -r ANSWER
+    if [[ "$ANSWER" == "y" ]]; then
+        echo "continuing install, please set TYEFI_ROOT in .bashrc or other environment file"
+        export TYEFI_ROOT=$PWD
+    else
+        echo "aborting install, please set TYEFI_ROOT to the root of the tyefi project"
+        exit 1
+    fi
+fi
+
+
+echo "installing apt dependencies"
+
+sudo apt update | sudo apt upgrade
+sudo apt install -y python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-dev libxslt-dev python3-dev git gcc alsa-utils
+# for p in python3-pip libasound2-dev libxslt1-dev libxml2-dev zlib1g-dev libxml2-dev libxslt-dev python3-dev git gcc alsa-utils; do
+#     sudo apt install -y $p
+# done
+
+
+if [[ -z "$DSPTOOLKIT_ROOT" ]]; then
+    warn "DSPTOOLKIT_ROOT is not set"
+    echo "please set DSPTOOLKIT_ROOT to the root of the dsptoolkit project"
+    DSPTOOLKIT_ROOT="$TYEFI_ROOT/lib/hifiberry-dsp"
+    exit 1
+fi
+
+
+verbose "TYEFI_ROOT set to $TYEFI_ROOT"
+verbose "DSPTOOLKIT_ROOT set to $DSPTOOLKIT_ROOT"
+
+
+# install python venv separate from tyefi since it has conflicting dependencies (RPi.GPIO)?
+PY_ENV="$TYEFI_ROOT/.venv"
+PY_BIN="$PY_ENV/bin"
+
+
+if [[ ! -d "$PY_ENV" ]]; then
+    info "installing python virtual environment at $PY_ENV"
+    sudo python3 -m venv --system-site-packages "$PY_ENV"
+else
+    verbose "python virtual environment already exists at $PY_ENV"
+fi
+
+if [[ -z "$VIRTUAL_ENV" ]]; then
+    echo "activating python virtual environment"
+    source "$PY_BIN/activate"
+else
+    echo "python virtual environment already activated"
+fi
+
+
+if [[ -z "$PY_BIN" || ! -d "$PY_BIN" || -z "$VIRTUAL_ENV" ]]; then
+    fatal "python virtual environment not found or activated correctly. make sure this script is run using "$TYEFI_ROOT/lib/install_libs.sh""
+    # info "installing python virtual environment at $PY_ENV"
+    # sudo python3 -m venv --system-site-packages "$PY_ENV"
+fi
+
+if [[ ! -d /var/lib/hifiberry ]]; then
+    info "creating /var/lib/hifiberry"
+    sudo mkdir -p /var/lib/hifiberry
+fi
+
+
+echo "installing dsptoolkit"
+"$PY_BIN/pip3" install "$DSPTOOLKIT_ROOT"
+
+
+BIN="$DSPTOOLKIT_ROOT/bin"
+ANSWER="y"
+
+# if [[ -f /lib/systemd/system/sigmatcp.service ]]; then
+#     echo "sigmatcp service already exists, would you like to remove it? (y/n)"
+#     read -r ANSWER
+
+#     if [[ "$ANSWER" == "y" ]]; then
+#         echo "removing existing sigmatcp service"
+#         for i in sigmatcp; do
+#             sudo systemctl stop $i
+#             sudo systemctl disable $i
+#         done
+#         sudo rm /lib/systemd/system/sigmatcp.service
+#     fi
+# fi
+
+if [[ "$ANSWER" == "y" ]]; then
+    # exec_start="\"$PY_BIN/python3\" \"$BIN/sigmatcpserver\" -v"
+    echo "installing sigmatcp service: $TYEFI_ROOT/root/etc/systemd/system/sigmatcp.service"
+
+    echo "removing existing sigmatcp service"
+    for i in sigmatcp; do
+        sudo systemctl stop $i
+        sudo systemctl disable $i
+    done
+    sudo rm /lib/systemd/system/sigmatcp.service
+
+#     cat <<EOT >/tmp/sigmatcp.service
+# [Unit]
+# Description=SigmaTCP Server for HiFiBerry DSP
+# Wants=network-online.target
+# After=network.target network-online.target
+# [Service]
+# Type=simple
+# User=tye
+# Group=tye
+# ExecStart=$exec_start
+# StandardOutput=journal
+# [Install]
+# WantedBy=multi-user.target
+# EOT
+
+#     sudo mv /tmp/sigmatcp.service /lib/systemd/system/sigmatcp.service
+    info "copying sigmatcp service from 'TYEFI_ROOT/root/etc/systemd/system/sigmatcp.service' to '/lib/systemd/system/sigmatcp.service'"
+    sudo cp "$TYEFI_ROOT/root/etc/systemd/system/sigmatcp.service" /lib/systemd/system/sigmatcp.service
+
+    sudo systemctl daemon-reload
+
+    for i in sigmatcp; do
+        sudo systemctl start $i
+        sudo systemctl enable $i
+    done
+else
+    echo "skipping sigmatcp server install"
+fi
+
+
+
+CFG_PATH=/boot/firmware/config.txt
+
+if [[ ! -f "$CFG_PATH" ]]; then
+    CFG_PATH=/boot/config.txt
+
+    if [[ ! -f "$CFG_PATH" ]]; then
+        echo "config.txt not found at /boot/config.txt or /boot/firmware/config.txt"
+        echo "please manually add 'dtparam=spi=on' to the config.txt file"
+        exit 1
+    fi
+fi
+
+echo "updating $CFG_PATH with 'dtparam=spi=on'"
+
+cat "$CFG_PATH" | grep -v "dtparam=spi" >> /tmp/config.txt
+echo "dtparam=spi=on" >> /tmp/config.txt
+sudo mv /tmp/config.txt "$CFG_PATH"

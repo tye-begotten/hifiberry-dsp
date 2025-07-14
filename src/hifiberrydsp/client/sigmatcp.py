@@ -29,13 +29,7 @@ import logging
 from hifiberrydsp.datatools import int_data
 from hifiberrydsp import datatools
 
-from hifiberrydsp.server.constants import \
-    COMMAND_READ, COMMAND_WRITE, COMMAND_EEPROM_FILE, COMMAND_CHECKSUM, \
-    COMMAND_WRITE_EEPROM_CONTENT, COMMAND_GET_META, \
-    COMMAND_META_RESPONSE, COMMAND_GPIO, COMMAND_GPIO_RESPONSE, \
-    DEFAULT_PORT, \
-    HEADER_SIZE, \
-    SigmaTCPException
+from hifiberrydsp.server.constants import *
 
 
 class SigmaTCPClient():
@@ -240,12 +234,41 @@ class SigmaTCPClient():
 
         return packet
 
-    def request_generic(self, request_code, response_code=None):
+    def __begin_request(self):
         if self.socket is None:
             if self.autoconnect:
                 self.connect()
             else:
                 raise SigmaTCPException("Not connected")
+
+    def erase_request(self, mem_target):
+        self.__begin_request()
+        
+        packet = bytearray(HEADER_SIZE)
+        packet[0] = COMMAND_ERASE
+        packet[1] = mem_target
+
+        self.socket.send(packet)
+        
+        data = self.socket.recv(HEADER_SIZE)
+        resp_code = data[0]
+        if resp_code != COMMAND_ERASE_RESPONSE:
+            logging.error("received unexpected response code %s, expected COMMAND_ERASE_RESPONSE", resp_code)
+            return None
+        length = int.from_bytes(data[6:10], byteorder='big')
+        addr = int.from_bytes(data[10:12], byteorder='big')
+        if (len(data) > HEADER_SIZE):
+            mem_result = data[HEADER_SIZE + 1]
+            if (mem_result != mem_target):
+                logging.error("requested erase for memory target %s but response target was %s", mem_target, mem_result)
+        else:
+            logging.error("no memory result in response")
+        
+        return (addr, length)
+                
+
+    def request_generic(self, request_code, response_code=None):
+        self.__begin_request()
 
         packet = self.generic_request(request_code)
         self.socket.send(packet)
@@ -269,11 +292,7 @@ class SigmaTCPClient():
             return data
 
     def request_metadata(self, attribute):
-        if self.socket is None:
-            if self.autoconnect:
-                self.connect()
-            else:
-                raise SigmaTCPException("Not connected")
+        self.__begin_request()
 
         packet = self.metadata_request(attribute)
         self.socket.send(packet)

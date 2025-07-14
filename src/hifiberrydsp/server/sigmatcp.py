@@ -47,6 +47,10 @@ from hifiberrydsp.alsa.alsasync import AlsaSync
 from hifiberrydsp.lg.soundsync import SoundSync
 from hifiberrydsp import datatools
 
+from hifiberrydsp.server.constants import *
+from ty3.core.env import Envars
+from ty3.core.fs import *
+
 from hifiberrydsp.server.constants import \
     COMMAND_READ, COMMAND_READRESPONSE, COMMAND_WRITE, \
     COMMAND_EEPROM_FILE, COMMAND_CHECKSUM, COMMAND_CHECKSUM_RESPONSE, \
@@ -66,30 +70,37 @@ this.notify_on_updates = None
 this.command_after_startup = None
 this.dsp=None
 
+TYEFI_ROOT = os.environ["TYEFI_ROOT"]
+cfg = Envars(f"{TYEFI_ROOT}/tyefi.env")
+file_store_root = path(cfg.get("DSP_FILE_STORE_ROOT", f"{TYEFI_ROOT}/bin/dsp"))
 
 def parameterfile():
-    if (os.geteuid() == 0):
-        return "/var/lib/hifiberry/dspparameters.dat"
-    else:
-        return os.path.expanduser("~/.hifiberry/dspparameters.dat")
+    return file_store_root["dspparameters.dat"].absolute
+    
+    # if (os.geteuid() == 0):
+    #     return "/var/lib/hifiberry/dspparameters.dat"
+    # else:
+    #     return os.path.expanduser("~/.hifiberry/dspparameters.dat")
 
 
 def dspprogramfile():
-    if (os.geteuid() == 0):
-        logging.info(
-            "running as root, data will be stored in /var/lib/hifiberry")
-        mydir = "/var/lib/hifiberry"
-    else:
-        mydir = "~/.hifiberry"
-        logging.info(
-            "not running as root, data will be stored in ~/.hifiberry")
-    try:
-        if not os.path.isdir(mydir):
-            os.makedirs(mydir)
-    except Exception as e:
-        logging.error("can't creeate directory {} ({})", mydir, e)
+    return file_store_root["dspprogram.xml"].absolute
+    
+    # if (os.geteuid() == 0):
+    #     logging.info(
+    #         "running as root, data will be stored in /var/lib/hifiberry")
+    #     mydir = "/var/lib/hifiberry"
+    # else:
+    #     mydir = "~/.hifiberry"
+    #     logging.info(
+    #         "not running as root, data will be stored in ~/.hifiberry")
+    # try:
+    #     if not os.path.isdir(mydir):
+    #         os.makedirs(mydir)
+    # except Exception as e:
+    #     logging.error("can't create directory {} ({})", mydir, e)
 
-    return os.path.expanduser(mydir + "/dspprogram.xml")
+    # return os.path.expanduser(mydir + "/dspprogram.xml")
 
 
 def startup_notify():
@@ -109,7 +120,7 @@ class SigmaTCPHandler(BaseRequestHandler):
     dsp = adau145x.Adau145x
     dspprogramfile = get_default_dspprofile_path()
     parameterfile = parameterfile()
-    alsasync = None
+    alsasync: AlsaSync = None
     lgsoundsync = None
     updating = False
     xml = None
@@ -207,6 +218,24 @@ class SigmaTCPHandler(BaseRequestHandler):
                         COMMAND_CHECKSUM_RESPONSE, 0, 16) + \
                         self.program_checksum(cached=False)
 
+                elif data[0] == COMMAND_ERASE:
+                    mem_type = data[1]
+                    if mem_type == COMMAND_PROGMEM:
+                        logging.info("received request to erase program memory")
+                        result = self.erase_program_memory()
+                        if result == None:
+                            result = self._response_packet(
+                                COMMAND_ERASE_RESPONSE, 0, 0)
+                        else:
+                            result = self._response_packet(
+                                COMMAND_ERASE_RESPONSE, result[0], result[1])
+                    else:
+                        logging.error("erase command for unknown memory type %s", mem_type)
+                        result = self._response_packet(
+                                COMMAND_ERASE_RESPONSE, 0, 0)
+                    if result is not None:
+                        result.append(mem_type)
+
                 elif data[0] == COMMAND_XML:
                     try:
                         data = self.get_and_check_xml()
@@ -232,6 +261,10 @@ class SigmaTCPHandler(BaseRequestHandler):
                         data = self.get_program_memory()
                     except IOError:
                         data = []  # empty response
+                        
+                    if data == None:
+                        # either SPI read failed, or program memory is erased
+                        data = []
 
                     # format program memory dump
                     dump = ""
@@ -340,20 +373,18 @@ class SigmaTCPHandler(BaseRequestHandler):
         if (checksum_xml is not None) and (checksum_xml != 0):
             if (checksum_xml != checksum_mem):
                 logging.error("checksums do not match, aborting")
-                SigmaTCPHandler.checksum_error = True
                 return
         else:
             logging.info("DSP profile doesn't have a checksum, "
                          "might be different from the program running now")
 
-        SigmaTCPHandler.checksum_error = False
 
     @staticmethod
     def get_checked_xml():
-        if not(SigmaTCPHandler.checksum_error):
-            if SigmaTCPHandler.xml is None:
-                SigmaTCPHandler.read_xml_profile()
+        if SigmaTCPHandler.xml is None:
+            SigmaTCPHandler.read_xml_profile()
 
+        if SigmaTCPHandler.xml:
             return SigmaTCPHandler.xml
         else:
             logging.debug("XML checksum error, ignoring XML file")
@@ -490,12 +521,43 @@ class SigmaTCPHandler(BaseRequestHandler):
         return adau145x.Adau145x.get_memory_block(addr, length)
 
     @staticmethod
-    def get_program_memory():
+    def get_program_memory(erased=False):
         '''
         Get the program memory from the DSP
         '''
-        return adau145x.Adau145x.get_program_memory()
+        return adau145x.Adau145x.get_program_memory(erased)
 
+    @staticmethod
+    def erase_program_memory():
+        addr = SigmaTCPHandler.dsp.PROGRAM_ADDR
+        remain = SigmaTCPHandler.dsp.PROGRAM_LENGTH * SigmaTCPHandler.dsp.WORD_LENGTH
+        
+        logging.info("resetting eeprom prog data")
+        
+        buf = bytearray(2048)
+        for i in range(0, len(buf)):
+            buf[i] = 0x00
+        
+        while remain > 0:
+            if remain < len(buf):
+                buf = bytearray(remain)
+                
+            logging.info(f"erasing {len(buf)} bytes starting at addr {hex(addr)}")
+            
+            SigmaTCPHandler.spi.write(addr, buf, True)
+            addr += len(buf)
+            remain -= len(buf)
+        
+        logging.info("prog data erased, verifying")
+        
+        prog_data = SigmaTCPHandler.get_program_memory(erased=True)
+        
+        if prog_data == None:
+            logging.error("EEPROM erase failed, program memory is not empty")
+            return None
+        else:
+            return (SigmaTCPHandler.dsp.PROGRAM_ADDR, SigmaTCPHandler.dsp.PROGRAM_LENGTH * SigmaTCPHandler.dsp.WORD_LENGTH)
+        
     @staticmethod
     def get_data_memory():
         '''
@@ -504,7 +566,7 @@ class SigmaTCPHandler(BaseRequestHandler):
         return adau145x.Adau145x.get_data_memory()
 
     @staticmethod
-    def program_checksum(cached=True):
+    def program_checksum(cached=False):
         return adau145x.Adau145x.calculate_program_checksum(cached=cached)
 
     @staticmethod
@@ -655,7 +717,8 @@ class SigmaTCPServerMain():
         self.restore = False
         self.abort = False
         self.zeroconf = None
-
+        self.erase = False
+        
         params = self.parse_config()
 
         # Determine the host to bind to
@@ -703,6 +766,9 @@ class SigmaTCPServerMain():
 
         if params["restore"]:
             self.restore = True
+        
+        if params["erase"]:
+            self.erase = True
 
         self.params = params
         
@@ -724,6 +790,7 @@ class SigmaTCPServerMain():
         parser.add_argument("--restore", action="store_true", help="Restore saved data memory")
         parser.add_argument("--localhost", action="store_true", help="Bind to localhost only")
         parser.add_argument("--bind-address", type=str, default=None, help="Specify IP address to bind to")
+        parser.add_argument("--erase", type=str, default=False, help="If set, erase EEPROM program memory on startup")
         parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
         args = parser.parse_args()
 
@@ -736,6 +803,7 @@ class SigmaTCPServerMain():
         params["verbose"] = args.verbose
         params["localhost"] = args.localhost
         params["bind_address"] = args.bind_address
+        params["erase"] = args.erase
 
         try:
             this.command_after_startup = config.get("server", "command_after_startup")
@@ -754,6 +822,12 @@ class SigmaTCPServerMain():
             
     def run(self):
         
+        if self.erase:
+            logging.info("erasing EEPROM program memory")
+            SigmaTCPHandler.erase_program_memory()
+            logging.info("EEPROM program memory erased, exiting")
+            return
+            
         # Check if a DSP is detected
         dsp_detected = adau145x.Adau145x.detect_dsp()
         if dsp_detected:

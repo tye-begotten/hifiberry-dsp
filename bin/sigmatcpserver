@@ -22,8 +22,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 '''
 
-import hifiberrydsp.dsptoolkit
+import logging
+import sys
 
-if __name__ == '__main__':
-    cmdline = hifiberrydsp.dsptoolkit.CommandLine()
-    cmdline.main()
+if __name__ == "__main__":
+
+    if "-v" in sys.argv:
+        print("Enabling debug logging")
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    import hifiberrydsp.server.sigmatcp
+
+    server = hifiberrydsp.server.sigmatcp.SigmaTCPServerMain()
+    server.run()
