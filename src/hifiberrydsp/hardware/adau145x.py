@@ -361,9 +361,9 @@ class Adau145x():
         Returns:
             bytes: MD5 digest
         '''
-        if cached and Adau145x._checksum_cache is not None:
-            logging.debug("using cached program checksum")
-            return Adau145x._checksum_cache
+        # if cached and Adau145x._checksum_cache is not None:
+        #     logging.debug("using cached program checksum")
+        #     return Adau145x._checksum_cache
 
         if program_data is None:
             program_data = Adau145x.get_program_memory()
