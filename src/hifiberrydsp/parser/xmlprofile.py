@@ -21,15 +21,16 @@ SOFTWARE.
 '''
 
 import logging
+import os
 
 import xmltodict
-
 from collections import OrderedDict
 
 from hifiberrydsp.hardware.adau145x import Adau145x
 from hifiberrydsp.datatools import parse_int_length
 
 ATTRIBUTE_CHECKSUM = "checksum"
+ATTRIBUTE_CHECKSUM_SHA1 = "checksum_sha1"
 ATTRIBUTE_VOL_CTL = "volumeControlRegister"
 ATTRIBUTE_VOL_LIMIT = "volumeLimitRegister"
 ATTRIBUTE_VOL_LIMIT_PI = "volumeLimitPiRegister"
@@ -124,13 +125,39 @@ def replace_in_memory_block(data, startaddr, replace_dict):
                  len(content)] = content
 
 
+def get_default_dspprofile_path():
+    """
+    Get the default path for the DSP profile file
+    
+    Returns:
+        str: Path to the default DSP profile file
+    """
+    if (os.geteuid() == 0):
+        logging.info(
+            "running as root, XML profile location is /var/lib/hifiberry")
+        mydir = "/var/lib/hifiberry"
+    else:
+        mydir = "~/.hifiberry"
+        logging.info(
+            "not running as root, XML profile location is  ~/.hifiberry")
+    try:
+        if not os.path.isdir(os.path.expanduser(mydir)):
+            os.makedirs(os.path.expanduser(mydir))
+    except Exception as e:
+        logging.error("can't create directory {} ({})", mydir, e)
+
+    return os.path.expanduser(mydir + "/dspprogram.xml")
+
+
 class XmlProfile():
 
-    def __init__(self, filename=None):
+    def __init__(self, filename=None, read_default_profile=False):
         self.dsp = Adau145x()
         self.doc = None
         self.filename = filename
         self.eeprom = DummyEepromWriter(self.dsp)
+        if filename is None and read_default_profile:
+            filename = self.dsp.get_default_profile()
         if filename is not None:
             try:
                 self.read_from_file(filename)
@@ -240,6 +267,16 @@ class XmlProfile():
             t = metadata["@type"]
             if (t == name):
                 return metadata["#text"]
+            
+    def get_meta_keys(self):
+        """
+        Get a list of all metadata keys
+        """
+        keys = []
+        for metadata in self.doc["ROM"]["beometa"]["metadata"]:
+            keys.append(metadata["@type"])
+
+        return keys
 
     def get_storable_registers(self):
         storables = []

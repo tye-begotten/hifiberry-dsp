@@ -1,0 +1,144 @@
+hifiberry-dsp (1.3.3) stable; urgency=medium
+
+  * Added /version endpoint to REST API for toolkit version information
+
+ -- HiFiBerry <info@hifiberry.com>  Tue, 02 Oct 2025 16:00:00 +0000
+
+hifiberry-dsp (1.3.2) stable; urgency=medium
+
+  * Enhanced checksum caching system with program length validation
+  * Added START_PULSE_REGISTER constant for DSP sample rate detection
+  * Refactored checksum functions into separate get_current_program_checksum() 
+    and get_current_program_checksum_sha1()
+  * Removed legacy cache fields for cleaner, more maintainable code
+  * Improved cache invalidation based on DSP program length changes
+  * Enhanced /cache endpoint with detailed checksum and validation status
+  * Fixed checksum cache synchronization between REST API and SigmaTCP server
+  * Added new dsp-install-profile command-line tool using REST API
+  * Added new dsp-program-info command-line tool using REST API
+  * Added new dsp-get-profile command-line tool using REST API
+  * Added comprehensive man pages for all new command-line tools
+  * Enhanced /dspprofile endpoint to accept raw XML content in addition to JSON
+  * Improved XML profile validation logic for better reliability
+
+ -- HiFiBerry <info@hifiberry.com>  Tue, 30 Sep 2025 16:00:00 +0000
+
+hifiberry-dsp (1.3.1) stable; urgency=medium
+
+  * Added XML profile support for checksum_sha1 attribute
+  * Enhanced profile matching to prioritize SHA-1 over MD5 checksums
+  * Updated SigmaTCP server to validate both MD5 and SHA-1 checksums
+  * Added comprehensive /program-info API endpoint
+  * Added deprecation notices to dsptoolkit command-line utility
+  * Updated documentation to guide users to REST API
+  * Fixed Debian packaging issues (aliased locations, removed unused binaries)
+  * Added AI agent configuration to maintain code style consistency
+
+ -- HiFiBerry <info@hifiberry.com>  Tue, 30 Sep 2025 15:00:00 +0000
+
+hifiberry-dsp (1.3) stable; urgency=medium
+
+  * Enhanced checksum API with dual MD5/SHA-1 algorithm support
+  * Added intelligent checksum mode selection (signature-based vs length-based)
+  * Implemented efficient checksum caching system to minimize DSP memory access
+  * Added program memory subset functionality for optimized checksum calculation
+  * Enhanced program length API with max parameter for maximum length retrieval
+  * Enhanced program memory API with multiple end detection modes 
+    (signature/full/len)
+  * Added checksum priority system: SHA-1 (length-based) over MD5 
+    (signature-based)
+  * Added comprehensive checksum documentation (doc/checksum.md)
+  * Improved performance with multi-level caching for memory and checksums
+  * Enhanced REST API with detailed checksum response including mode and 
+    length info
+
+ -- HiFiBerry <info@hifiberry.com>  Mon, 29 Sep 2025 15:00:00 +0000
+
+hifiberry-dsp (1.2.1) stable; urgency=medium
+
+  * Fix logging bug
+  * Added REST API endpoint to retrieve DSP program length (/program-length)
+  * Added REST API endpoint to retrieve DSP program memory (/program-memory)
+  * Enhanced program memory API with multiple output formats (hex, raw, base64)
+  * Updated REST API documentation with new program memory endpoints
+
+ -- HiFiBerry <info@hifiberry.com>  Sun, 29 Sep 2025 12:00:00 +0000
+
+hifiberry-dsp (1.2) stable; urgency=medium
+
+  * Major architecture refactoring: Filter Store to Settings Store
+  * Renamed FilterStore class to SettingsStore for generic settings support
+  * Renamed filters.json to dspsettings.json for consistent naming
+  * Added dedicated memory settings storage with store parameter in memory API
+  * Enhanced JSON structure to support both filters and memory settings
+  * Added automatic migration from old filter-only format to new structure
+  * Enhanced sigmatcp server with memory settings autoloading support
+  * Fixed memory API address parsing bug (hex vs decimal inconsistency)
+  * Added concurrent write protection with file locking for settings store
+  * Added checksum normalization to prevent duplicate profile entries
+  * Enhanced REST API consistency across memory and register endpoints
+  * Added comprehensive backward compatibility for existing filter APIs
+  * Improved error handling and validation throughout settings system
+  * Enhanced debug logging with memory write tracing capabilities
+  * Added comprehensive documentation for new settings store architecture
+
+ -- HiFiBerry <info@hifiberry.com>  Thu, 08 Aug 2025 12:00:00 +0000
+
+hifiberry-dsp (1.1) stable; urgency=medium
+
+  * Added comprehensive Filter Store API with JSON persistence
+  * Added filter storage organized by DSP profile checksum
+  * Added automatic filter loading and persistence via REST API
+  * Added sigmatcp server autoloading of stored filters on DSP updates
+  * Added REST API endpoints for filter management (/filters)
+  * Added DSP program checksum endpoint (/checksum)
+  * Added cache management and status endpoint (/cache)
+  * Added bulk profile metadata endpoint (/profiles/metadata)
+  * Added checksum caching for improved REST API performance
+  * Added debug mode with --debug flag for memory write logging
+  * Added systemd configuration support via /etc/default/sigmatcpserver
+  * Added Bypass/PassThrough filter type for signal pass-through
+  * Added comprehensive debug logging for all memory writes
+  * Enhanced REST API documentation with detailed examples
+  * Fixed memory write debug logging bug in sigmatcp server
+  * Enhanced filter store with offset-aware addressing
+  * Enhanced biquad filter support with coefficient calculation
+  * Moved filter storage to /var/lib/hifiberry/filters.json
+  * Improved error handling and validation throughout system
+
+ -- HiFiBerry <info@hifiberry.com>  Wed, 07 Aug 2025 14:00:00 +0000
+
+hifiberry-dsp (1.0.3) stable; urgency=low
+
+  * Changed distribution from unstable to stable
+  * Improved package stability and compatibility
+
+ -- HiFiBerry <info@hifiberry.com>  Mon, 30 Jun 2025 15:30:00 +0000
+
+hifiberry-dsp (1.0.2) stable; urgency=low
+
+  * Package renamed from python3-hifiberry-dsp to hifiberry-dsp
+
+ -- HiFiBerry <info@hifiberry.com>  Mon, 30 Jun 2025 12:00:00 +0000
+
+hifiberry-dsp (1.0.1) stable; urgency=low
+
+  * Changed packaging to debian sbuild
+
+ -- HiFiBerry <info@hifiberry.com>  Thu, 26 Jun 2025 12:00:00 +0000
+
+hifiberry-dsp (1.0) stable; urgency=low
+
+  * Initial Debian package release
+  * Collection of tools to configure HiFiBerry DSP boards
+  * Program DSP boards from SigmaStudio
+  * Support for SigmaTCP server
+  * ALSA volume control integration
+  * REW filter support
+  * DSP profile management
+  * EEPROM programming capabilities
+  * Zeroconf network discovery
+  * Web interface support
+  * Command line utilities for DSP configuration
+
+ -- HiFiBerry <info@hifiberry.com>  Thu, 24 Jun 2025 12:00:00 +0000

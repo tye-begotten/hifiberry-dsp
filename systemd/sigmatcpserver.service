@@ -1,0 +1,16 @@
+[Unit]
+Description=HiFiBerry DSP TCP/REST API service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/default/sigmatcpserver
+ExecStart=sigmatcpserver --localhost --enable-rest $DEBUG_OPTIONS $EXTRA_OPTIONS
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

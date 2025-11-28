@@ -65,6 +65,11 @@ import hifiberrydsp
 MODE_BOTH = 0
 MODE_LEFT = 1
 MODE_RIGHT = 2
+MODE_DESCRIPTION = {
+        0: 'both channels',
+        1: 'left channel',
+        2: 'right channel'
+        }
 
 DISPLAY_FLOAT = 0
 DISPLAY_INT = 1
@@ -434,6 +439,10 @@ class CommandLine():
         }
 
         self.command_description = """
+DEPRECATION NOTICE: This command-line tool is deprecated. 
+Please use the REST API instead: sigmatcpserver --rest
+Documentation: http://localhost:8080/api/docs
+
 commands and parameters to get you started:
 
     get-meta dsp_detected           report the dsp chip identified by sigmatcpserver
@@ -469,7 +478,7 @@ commands and parameters to get you started:
                                    to 2 (only right channel)
                                    at balance=1 the volume setting on both channels is equal
 
-    set-rew-filters|set-rew-filters-left|set-rew-filters-right <filename>
+    apply-rew-filters|apply-rew-filters-left|apply-rew-filters-right <filename>
                                    Deploys parametric equaliser settings calculated by REW to the 
                                    equaliser filter banks (left, right or both)
 
@@ -679,7 +688,7 @@ for more documentation visit https://github.com/hifiberry/hifiberry-dsp/blob/mas
         self.dsptk.clear_iir_filters(mode)
         try:
             self.dsptk.set_filters(filters, mode)
-            print("Filters configured on both channels:")
+            print(f"Filters configured on {MODE_DESCRIPTION[mode]}:")
             for f in filters:
                 print(f.description)
         except DSPError as e:
@@ -1086,8 +1095,31 @@ for more documentation visit https://github.com/hifiberry/hifiberry-dsp/blob/mas
             logging.warn("store_attributes: replace dict was empty")
 
     def main(self):
+        
+        # Display deprecation warning
+        print("=" * 80)
+        print("DEPRECATION NOTICE")
+        print("=" * 80)
+        print("The 'dsptoolkit' command-line utility is DEPRECATED and will be removed")
+        print("in a future version.")
+        print()
+        print("Please use the REST API instead:")
+        print("  • Start the server: sigmatcpserver --rest")
+        print("  • API documentation: http://localhost:8080/api/docs")
+        print("  • Example: curl http://localhost:8080/api/checksum")
+        print()
+        print("The REST API provides:")
+        print("  • Better performance with caching")
+        print("  • Modern JSON responses")
+        print("  • Enhanced checksum support (MD5 + SHA-1)")
+        print("  • Web-based interface")
+        print("  • Comprehensive documentation")
+        print()
+        print("For migration help, see: doc/restapi.md")
+        print("=" * 80)
+        print()
 
-        parser = argparse.ArgumentParser(description='HiFiBerry DSP toolkit',
+        parser = argparse.ArgumentParser(description='HiFiBerry DSP toolkit (DEPRECATED - Use REST API instead)',
                                          formatter_class = argparse.RawTextHelpFormatter,
                                          epilog = self.command_description)
         parser.add_argument('--delay',
