@@ -11,6 +11,7 @@ tmp
 /update
 build
 dist
+<<<<<<<<< Temporary merge branch 1
 *.tar.gz
 deb_dist
 beocreate-universal-10.xml

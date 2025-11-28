@@ -29,6 +29,9 @@ from collections import OrderedDict
 from hifiberrydsp.hardware.adau145x import Adau145x
 from hifiberrydsp.datatools import parse_int_length
 
+from ty3.core.env import Envars
+from ty3.core.fs import *
+
 ATTRIBUTE_CHECKSUM = "checksum"
 ATTRIBUTE_CHECKSUM_SHA1 = "checksum_sha1"
 ATTRIBUTE_VOL_CTL = "volumeControlRegister"
@@ -95,6 +98,11 @@ MEMTYPE = {
 }
 
 
+TYEFI_ROOT = os.environ["TYEFI_ROOT"]
+cfg = Envars(f"{TYEFI_ROOT}/tyefi.env")
+file_store_root = path(cfg.get("DSP_FILE_STORE_ROOT", f"{TYEFI_ROOT}/bin/dsp"))
+
+
 def replace_in_memory_block(data, startaddr, replace_dict):
     """
     Replace memory cells in memory write commands in an XML profile
@@ -132,21 +140,23 @@ def get_default_dspprofile_path():
     Returns:
         str: Path to the default DSP profile file
     """
-    if (os.geteuid() == 0):
-        logging.info(
-            "running as root, XML profile location is /var/lib/hifiberry")
-        mydir = "/var/lib/hifiberry"
-    else:
-        mydir = "~/.hifiberry"
-        logging.info(
-            "not running as root, XML profile location is  ~/.hifiberry")
-    try:
-        if not os.path.isdir(os.path.expanduser(mydir)):
-            os.makedirs(os.path.expanduser(mydir))
-    except Exception as e:
-        logging.error("can't create directory {} ({})", mydir, e)
+    return file_store_root["dspprogram.xml"].absolute
+    
+    # if (os.geteuid() == 0):
+    #     logging.info(
+    #         "running as root, XML profile location is /var/lib/hifiberry")
+    #     mydir = "/var/lib/hifiberry"
+    # else:
+    #     mydir = "~/.hifiberry"
+    #     logging.info(
+    #         "not running as root, XML profile location is  ~/.hifiberry")
+    # try:
+    #     if not os.path.isdir(os.path.expanduser(mydir)):
+    #         os.makedirs(os.path.expanduser(mydir))
+    # except Exception as e:
+    #     logging.error("can't create directory {} ({})", mydir, e)
 
-    return os.path.expanduser(mydir + "/dspprogram.xml")
+    # return os.path.expanduser(mydir + "/dspprogram.xml")
 
 
 class XmlProfile():

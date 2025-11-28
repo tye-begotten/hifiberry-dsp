@@ -26,7 +26,6 @@ import os
 import sys
 import logging
 import hashlib
-import argparse
 
 from threading import Thread
 
@@ -41,31 +40,17 @@ from hifiberrydsp.hardware import adau145x
 from hifiberrydsp.hardware.spi import SpiHandler
 from hifiberrydsp.datatools import int_data
 from hifiberrydsp.parser.xmlprofile import \
-    XmlProfile, ATTRIBUTE_VOL_CTL, ATTRIBUTE_SPDIF_ACTIVE, \
-    get_default_dspprofile_path
+    XmlProfile, ATTRIBUTE_VOL_CTL, ATTRIBUTE_SPDIF_ACTIVE
 from hifiberrydsp.alsa.alsasync import AlsaSync
 from hifiberrydsp.lg.soundsync import SoundSync
 from hifiberrydsp import datatools
 
-from hifiberrydsp.server.constants import \
-    COMMAND_READ, COMMAND_READRESPONSE, COMMAND_WRITE, \
-    COMMAND_EEPROM_FILE, COMMAND_CHECKSUM, COMMAND_CHECKSUM_RESPONSE, \
-    COMMAND_WRITE_EEPROM_CONTENT, COMMAND_XML, COMMAND_XML_RESPONSE, \
-    COMMAND_STORE_DATA, COMMAND_RESTORE_DATA, COMMAND_GET_META, \
-    COMMAND_META_RESPONSE, COMMAND_PROGMEM, COMMAND_PROGMEM_RESPONSE, \
-    COMMAND_DATAMEM, COMMAND_DATAMEM_RESPONSE, \
-    COMMAND_GPIO, \
-    HEADER_SIZE, \
-    DEFAULT_PORT
-from hifiberrydsp.api.restapi import run_api  # Import the REST API server
-from hifiberrydsp.api.settings_store import SettingsStore
-from hifiberrydsp.filtering.biquad import Biquad
-import binascii
-import shutil
-# import hifiberrydsp
+from hifiberrydsp.server.constants import *
+from ty3.core.env import Envars
+from ty3.core.fs import *
 
-# Constants
-DSP_PROFILES_DIRECTORY = "/usr/share/hifiberry/dspprofiles"
+from hifiberrydsp.api.restapi import run_api  # Import the REST API server
+# import hifiberrydsp
 
 # URL to notify on DSP program updates
 this = sys.modules[__name__]
@@ -73,30 +58,37 @@ this.notify_on_updates = None
 this.command_after_startup = None
 this.dsp=None
 
+TYEFI_ROOT = os.environ["TYEFI_ROOT"]
+cfg = Envars(f"{TYEFI_ROOT}/tyefi.env")
+file_store_root = path(cfg.get("DSP_FILE_STORE_ROOT", f"{TYEFI_ROOT}/bin/dsp"))
 
 def parameterfile():
-    if (os.geteuid() == 0):
-        return "/var/lib/hifiberry/dspparameters.dat"
-    else:
-        return os.path.expanduser("~/.hifiberry/dspparameters.dat")
+    return file_store_root["dspparameters.dat"].absolute
+    
+    # if (os.geteuid() == 0):
+    #     return "/var/lib/hifiberry/dspparameters.dat"
+    # else:
+    #     return os.path.expanduser("~/.hifiberry/dspparameters.dat")
 
 
 def dspprogramfile():
-    if (os.geteuid() == 0):
-        logging.info(
-            "running as root, data will be stored in /var/lib/hifiberry")
-        mydir = "/var/lib/hifiberry"
-    else:
-        mydir = "~/.hifiberry"
-        logging.info(
-            "not running as root, data will be stored in ~/.hifiberry")
-    try:
-        if not os.path.isdir(mydir):
-            os.makedirs(mydir)
-    except Exception as e:
-        logging.error("can't creeate directory {} ({})", mydir, e)
+    return file_store_root["dspprogram.xml"].absolute
+    
+    # if (os.geteuid() == 0):
+    #     logging.info(
+    #         "running as root, data will be stored in /var/lib/hifiberry")
+    #     mydir = "/var/lib/hifiberry"
+    # else:
+    #     mydir = "~/.hifiberry"
+    #     logging.info(
+    #         "not running as root, data will be stored in ~/.hifiberry")
+    # try:
+    #     if not os.path.isdir(mydir):
+    #         os.makedirs(mydir)
+    # except Exception as e:
+    #     logging.error("can't create directory {} ({})", mydir, e)
 
-    return os.path.expanduser(mydir + "/dspprogram.xml")
+    # return os.path.expanduser(mydir + "/dspprogram.xml")
 
 
 def startup_notify():
@@ -108,178 +100,21 @@ def startup_notify():
     
     logging.info("calling %s", this.command_after_startup)
     os.system(this.command_after_startup)
-
-
-def find_and_restore_dsp_profile():
-    """
-    Find and restore the correct DSP profile from the profiles directory
-    if the current profile is missing or has incorrect checksum
-    """
-    try:
-        current_profile_path = dspprogramfile()
-        
-        # Check if current profile exists and has correct checksum
-        profile_valid = False
-        current_checksum = None
-        
-        if os.path.exists(current_profile_path):
-            try:
-                # Get DSP program checksums (try both SHA-1 and MD5)
-                dsp_checksums = adau145x.Adau145x.calculate_program_checksums(mode="length", algorithms=["sha1", "md5"], cached=False)
-                if not dsp_checksums:
-                    # Fallback to signature-based if length-based fails
-                    dsp_checksums = adau145x.Adau145x.calculate_program_checksums(mode="signature", algorithms=["sha1", "md5"], cached=False)
-                
-                if dsp_checksums:
-                    dsp_checksum_sha1 = dsp_checksums.get("sha1")
-                    dsp_checksum_md5 = dsp_checksums.get("md5")
-                    
-                    # Try to load current profile and check its checksums
-                    try:
-                        xml_profile = XmlProfile(current_profile_path)
-                        
-                        # Check SHA-1 checksum first (preferred)
-                        profile_checksum_sha1 = xml_profile.get_meta("checksum_sha1")
-                        if profile_checksum_sha1 and dsp_checksum_sha1:
-                            if profile_checksum_sha1.upper() == dsp_checksum_sha1.upper():
-                                profile_valid = True
-                                logging.debug(f"Current DSP profile is valid with SHA-1 checksum {dsp_checksum_sha1}")
-                        
-                        # Fall back to MD5 checksum if SHA-1 not available or doesn't match
-                        if not profile_valid:
-                            profile_checksum_md5 = xml_profile.get_meta("checksum")
-                            if profile_checksum_md5 and dsp_checksum_md5:
-                                if profile_checksum_md5.upper() == dsp_checksum_md5.upper():
-                                    profile_valid = True
-                                    logging.debug(f"Current DSP profile is valid with MD5 checksum {dsp_checksum_md5}")
-                                else:
-                                    logging.info(f"DSP profile checksum mismatch: profile MD5={profile_checksum_md5}, DSP MD5={dsp_checksum_md5}")
-                        
-                        if not profile_valid:
-                            checksums_info = []
-                            if profile_checksum_sha1:
-                                checksums_info.append(f"profile SHA-1={profile_checksum_sha1}")
-                            if profile_checksum_md5:
-                                checksums_info.append(f"profile MD5={profile_checksum_md5}")
-                            if dsp_checksum_sha1:
-                                checksums_info.append(f"DSP SHA-1={dsp_checksum_sha1}")
-                            if dsp_checksum_md5:
-                                checksums_info.append(f"DSP MD5={dsp_checksum_md5}")
-                            logging.info(f"DSP profile checksum mismatch: {', '.join(checksums_info)}")
-                            
-                    except Exception as e:
-                        logging.info(f"Error loading current DSP profile: {str(e)}")
-                else:
-                    logging.warning("Could not get DSP program checksums")
-                    
-            except Exception as e:
-                logging.warning(f"Error validating current DSP profile: {str(e)}")
-        else:
-            logging.info(f"DSP profile file not found: {current_profile_path}")
-        
-        if profile_valid:
-            return True
-            
-        # Profile is invalid or missing, search for correct one
-        if not os.path.exists(DSP_PROFILES_DIRECTORY):
-            logging.warning(f"DSP profiles directory not found: {DSP_PROFILES_DIRECTORY}")
-            return False
-            
-        # Get target checksum from DSP (try both SHA-1 and MD5)
-        dsp_checksums = adau145x.Adau145x.calculate_program_checksums(mode="length", algorithms=["sha1", "md5"], cached=False)
-        if not dsp_checksums:
-            # Fallback to signature-based if length-based fails
-            dsp_checksums = adau145x.Adau145x.calculate_program_checksums(mode="signature", algorithms=["sha1", "md5"], cached=False)
-        
-        if not dsp_checksums:
-            logging.warning("Could not get DSP program checksum for profile search")
-            return False
-            
-        # Prefer SHA-1 over MD5 for matching
-        target_checksum_sha1 = dsp_checksums.get("sha1")
-        target_checksum_md5 = dsp_checksums.get("md5")
-        
-        if target_checksum_sha1:
-            logging.info(f"Searching for DSP profile with SHA-1 checksum: {target_checksum_sha1}")
-        elif target_checksum_md5:
-            logging.info(f"Searching for DSP profile with MD5 checksum: {target_checksum_md5}")
-        else:
-            logging.warning("No valid checksums available for profile search")
-            return False
-        
-        # Search for matching profile in profiles directory
-        found_profile = None
-        try:
-            for filename in os.listdir(DSP_PROFILES_DIRECTORY):
-                if filename.endswith('.xml'):
-                    profile_path = os.path.join(DSP_PROFILES_DIRECTORY, filename)
-                    try:
-                        xml_profile = XmlProfile(profile_path)
-                        
-                        # Check SHA-1 checksum first (preferred)
-                        profile_checksum_sha1 = xml_profile.get_meta("checksum_sha1")
-                        if profile_checksum_sha1 and target_checksum_sha1:
-                            if profile_checksum_sha1.upper() == target_checksum_sha1.upper():
-                                found_profile = profile_path
-                                logging.info(f"Found matching DSP profile (SHA-1): {filename}")
-                                break
-                        
-                        # Fall back to MD5 checksum if SHA-1 not available or doesn't match
-                        profile_checksum_md5 = xml_profile.get_meta("checksum")
-                        if profile_checksum_md5 and target_checksum_md5:
-                            if profile_checksum_md5.upper() == target_checksum_md5.upper():
-                                found_profile = profile_path
-                                logging.info(f"Found matching DSP profile (MD5): {filename}")
-                                break
-                            
-                    except Exception as e:
-                        logging.debug(f"Error checking profile {filename}: {str(e)}")
-                        continue
-        except Exception as e:
-            logging.error(f"Error searching profiles directory: {str(e)}")
-            return False
-        
-        if found_profile:
-            try:
-                # Ensure target directory exists
-                target_dir = os.path.dirname(current_profile_path)
-                os.makedirs(target_dir, exist_ok=True)
-                
-                # Copy the profile
-                shutil.copy2(found_profile, current_profile_path)
-                logging.info(f"Copied DSP profile from {found_profile} to {current_profile_path}")
-                
-                return True
-            except Exception as e:
-                logging.error(f"Error copying DSP profile: {str(e)}")
-                return False
-        else:
-            checksums_msg = []
-            if target_checksum_sha1:
-                checksums_msg.append(f"SHA-1: {target_checksum_sha1}")
-            if target_checksum_md5:
-                checksums_msg.append(f"MD5: {target_checksum_md5}")
-            logging.warning(f"No matching DSP profile found in {DSP_PROFILES_DIRECTORY} for checksums: {', '.join(checksums_msg)}")
-            return False
-        
-    except Exception as e:
-        logging.error(f"Error in find_and_restore_dsp_profile: {str(e)}")
-        return False
+    
     
 
 class SigmaTCPHandler(BaseRequestHandler):
 
     checksum = None
+    spi = SpiHandler()
     dsp = adau145x.Adau145x
-    dspprogramfile = get_default_dspprofile_path()
+    dspprogramfile = dspprogramfile()
     parameterfile = parameterfile()
-    alsasync = None
+    alsasync: AlsaSync = None
     lgsoundsync = None
     updating = False
     xml = None
     checksum_error = False
-    autoload_filters = True  # Default to True, can be disabled via command line
-    debug_memory_writes = False  # Debug logging for memory writes
 
     def __init__(self, request, client_address, server):
         logging.debug("__init__")
@@ -373,6 +208,24 @@ class SigmaTCPHandler(BaseRequestHandler):
                         COMMAND_CHECKSUM_RESPONSE, 0, 16) + \
                         self.program_checksum(cached=False)
 
+                elif data[0] == COMMAND_ERASE:
+                    mem_type = data[1]
+                    if mem_type == COMMAND_PROGMEM:
+                        logging.info("received request to erase program memory")
+                        result = self.erase_program_memory()
+                        if result == None:
+                            result = self._response_packet(
+                                COMMAND_ERASE_RESPONSE, 0, 0)
+                        else:
+                            result = self._response_packet(
+                                COMMAND_ERASE_RESPONSE, result[0], result[1])
+                    else:
+                        logging.error("erase command for unknown memory type %s", mem_type)
+                        result = self._response_packet(
+                                COMMAND_ERASE_RESPONSE, 0, 0)
+                    if result is not None:
+                        result.append(mem_type)
+
                 elif data[0] == COMMAND_XML:
                     try:
                         data = self.get_and_check_xml()
@@ -398,6 +251,10 @@ class SigmaTCPHandler(BaseRequestHandler):
                         data = self.get_program_memory()
                     except IOError:
                         data = []  # empty response
+                        
+                    if data == None:
+                        # either SPI read failed, or program memory is erased
+                        data = []
 
                     # format program memory dump
                     dump = ""
@@ -486,80 +343,38 @@ class SigmaTCPHandler(BaseRequestHandler):
 
     @staticmethod
     def read_xml_profile():
-        logging.info("reading XML file %s", SigmaTCPHandler.dspprogramfile)
+        logging.info(f"reading XML profile form {SigmaTCPHandler.dspprogramfile}")
         SigmaTCPHandler.xml = XmlProfile(SigmaTCPHandler.dspprogramfile)
-        
-        # Check SHA-1 checksum first (preferred)
-        cs_sha1 = SigmaTCPHandler.xml.get_meta("checksum_sha1")
-        cs_md5 = SigmaTCPHandler.xml.get_meta("checksum")
-        
-        logging.debug("SHA-1 checksum from XML: %s", cs_sha1)
-        logging.debug("MD5 checksum from XML: %s", cs_md5)
-        
-        # Get memory checksums
-        try:
-            # Try length-based checksums first
-            memory_checksums = adau145x.Adau145x.calculate_program_checksums(mode="length", algorithms=["sha1", "md5"], cached=True)
-            if not memory_checksums:
-                # Fallback to signature-based checksums
-                memory_checksums = adau145x.Adau145x.calculate_program_checksums(mode="signature", algorithms=["sha1", "md5"], cached=True)
-            
-            memory_checksum_sha1 = memory_checksums.get("sha1")
-            memory_checksum_md5 = memory_checksums.get("md5")
-            
-            logging.debug("SHA-1 checksum from memory: %s", memory_checksum_sha1)
-            logging.debug("MD5 checksum from memory: %s", memory_checksum_md5)
-            
-        except Exception as e:
-            logging.error(f"Error calculating memory checksums: {str(e)}")
-            memory_checksum_sha1 = None
-            memory_checksum_md5 = None
-        
-        # Check checksums with priority: SHA-1 first, then MD5
-        checksum_match = False
-        if cs_sha1 and memory_checksum_sha1:
-            if cs_sha1.upper() == memory_checksum_sha1.upper():
-                checksum_match = True
-                logging.info("SHA-1 checksums match")
-            else:
-                logging.warning(f"SHA-1 checksum mismatch: XML={cs_sha1}, memory={memory_checksum_sha1}")
-        
-        # Fall back to MD5 if SHA-1 doesn't match or isn't available
-        if not checksum_match and cs_md5 and memory_checksum_md5:
-            # Convert memory checksum to bytes format for backward compatibility
-            try:
-                memory_checksum_md5_bytes = bytes.fromhex(memory_checksum_md5)
-                SigmaTCPHandler.checksum_xml = bytearray()
-                for i in range(0, len(cs_md5), 2):
-                    octet = int(cs_md5[i:i + 2], 16)
-                    SigmaTCPHandler.checksum_xml.append(octet)
-                
-                if SigmaTCPHandler.checksum_xml == memory_checksum_md5_bytes:
-                    checksum_match = True
-                    logging.info("MD5 checksums match")
-                else:
-                    logging.warning(f"MD5 checksum mismatch: XML={cs_md5}, memory={memory_checksum_md5}")
-            except Exception as e:
-                logging.error(f"Error comparing MD5 checksums: {str(e)}")
-        
-        # Handle checksum validation result
-        if cs_sha1 or cs_md5:
-            if not checksum_match:
+        cs = SigmaTCPHandler.xml.get_meta("checksum")
+        logging.debug("checksum from XML: %s", cs)
+        SigmaTCPHandler.checksum_xml = None
+        if cs is not None:
+            SigmaTCPHandler.checksum_xml = bytearray()
+            for i in range(0, len(cs), 2):
+                octet = int(cs[i:i + 2], 16)
+                SigmaTCPHandler.checksum_xml.append(octet)
+
+        checksum_mem = SigmaTCPHandler.program_checksum()
+        checksum_xml = SigmaTCPHandler.checksum_xml
+        logging.info("checksum memory: %s, xmlfile: %s",
+                     checksum_mem,
+                     checksum_xml)
+
+        if (checksum_xml is not None) and (checksum_xml != 0):
+            if (checksum_xml != checksum_mem):
                 logging.error("checksums do not match, aborting")
-                SigmaTCPHandler.checksum_error = True
                 return
         else:
             logging.info("DSP profile doesn't have a checksum, "
                          "might be different from the program running now")
 
-        SigmaTCPHandler.checksum_error = False
 
     @staticmethod
     def get_checked_xml():
-        if not(SigmaTCPHandler.checksum_error):
-            if SigmaTCPHandler.xml is None:
-                SigmaTCPHandler.read_xml_profile()
+        if SigmaTCPHandler.xml is None:
+            SigmaTCPHandler.read_xml_profile()
 
+        if SigmaTCPHandler.xml:
             return SigmaTCPHandler.xml
         else:
             logging.debug("XML checksum error, ignoring XML file")
@@ -593,9 +408,9 @@ class SigmaTCPHandler(BaseRequestHandler):
         addr = int.from_bytes(data[10:12], byteorder='big')
         length = int.from_bytes(data[6:10], byteorder='big')
         
-        logging.debug("Handle read %s/%s", addr, length)
+        logging.debug("Handle read %s/%s",addr,length)
 
-        spi_response = adau145x.Adau145x.read_memory(addr, length)
+        spi_response = SigmaTCPHandler.spi.read(addr, length)
         logging.debug("read {} bytes from {}".format(length, addr))
 
         res = SigmaTCPHandler._response_packet(COMMAND_READRESPONSE,
@@ -625,21 +440,8 @@ class SigmaTCPHandler(BaseRequestHandler):
             SigmaTCPHandler.prepare_update()
 
         logging.debug("writing {} bytes to {}".format(length, addr))
-        
-        # Extract memory data first
         memdata = data[14:]
-        
-        # Debug logging for memory writes if enabled
-        if SigmaTCPHandler.debug_memory_writes:
-            logging.info(f"DEBUG: Memory write to address 0x{addr:04X} ({addr}), length: {length} bytes")
-            if length <= 20:  # Log data for small writes
-                hex_data = ' '.join(f'{b:02X}' for b in memdata[:20])
-                logging.info(f"DEBUG: Write data: {hex_data}")
-            else:
-                hex_data = ' '.join(f'{b:02X}' for b in memdata[:16])
-                logging.info(f"DEBUG: Write data (first 16 bytes): {hex_data}...")
-        
-        res = adau145x.Adau145x.write_memory(addr, memdata)
+        res = SigmaTCPHandler.spi.write(addr, memdata)
 
         if addr == SigmaTCPHandler.dsp.HIBERNATE_REGISTER and \
                 SigmaTCPHandler.updating and memdata == b'\00\00':
@@ -651,15 +453,57 @@ class SigmaTCPHandler(BaseRequestHandler):
 
     @staticmethod
     def write_eeprom_content(xmldata):
-        logging.info("writing XML file through Adau145x implementation")
-        result = adau145x.Adau145x.write_eeprom_content(xmldata)
-        
-        # After the EEPROM write is done, set internal state as needed
-        if result:  # Success
+
+        logging.info("writing XML file: %s", xmldata)
+
+        try:
+            doc = xmltodict.parse(xmldata)
+
+            SigmaTCPHandler.prepare_update()
+            for action in doc["ROM"]["page"]["action"]:
+                instr = action["@instr"]
+
+                if instr == "writeXbytes":
+                    addr = int(action["@addr"])
+                    paramname = action["@ParamName"]
+                    data = []
+                    for d in action["#text"].split(" "):
+                        value = int(d, 16)
+                        data.append(value)
+
+                    logging.debug("writeXbytes %s %s", addr, len(data))
+                    SigmaTCPHandler.spi.write(addr, data)
+
+                    # Sleep after erase operations
+                    if ("g_Erase" in paramname):
+                        logging.debug(
+                            "found erase command, waiting 10 seconds to finish")
+                        time.sleep(10)
+
+                    # Delay after a page write
+                    if ("Page_" in paramname):
+                        logging.debug(
+                            "found page write command, waiting 0.5 seconds to finish")
+                        time.sleep(0.5)
+
+                if instr == "delay":
+                    logging.debug("delay")
+                    time.sleep(1)
+
             SigmaTCPHandler.finish_update()
-            return b'\01'  # Convert True to binary 1
-        else:
-            return b'\00'  # Convert False to binary 0
+
+            # Write current DSP profile
+            with open(SigmaTCPHandler.dspprogramfile, "w+b") as dspprogram:
+                if (isinstance(xmldata, str)):
+                    xmldata = xmldata.encode("utf-8")
+                dspprogram.write(xmldata)
+
+        except Exception as e:
+            logging.error("exception during EEPROM write: %s", e)
+            logging.exception(e)
+            return b'\00'
+
+        return b'\01'
 
     @staticmethod
     def write_eeprom_file(filename):
@@ -674,8 +518,9 @@ class SigmaTCPHandler(BaseRequestHandler):
     @staticmethod
     def save_data_memory():
         logging.info("store: getting checksum")
-        checksum = adau145x.Adau145x.calculate_program_checksum(cached=True)
-        memory = adau145x.Adau145x.get_data_memory()
+        checksum = SigmaTCPHandler.program_checksum()
+        memory = SigmaTCPHandler.get_memory_block(SigmaTCPHandler.dsp.DATA_ADDR,
+                                                  SigmaTCPHandler.dsp.DATA_LENGTH)
         logging.info("store: writing memory dump to file")
         SigmaTCPHandler.store_parameters(checksum, memory)
 
@@ -683,7 +528,7 @@ class SigmaTCPHandler(BaseRequestHandler):
     def restore_data_memory():
 
         logging.info("restore: checking checksum")
-        checksum = adau145x.Adau145x.calculate_program_checksum(cached=False)
+        checksum = SigmaTCPHandler.program_checksum(cached=False)
         memory = SigmaTCPHandler.restore_parameters(checksum)
 
         if memory is None:
@@ -699,32 +544,148 @@ class SigmaTCPHandler(BaseRequestHandler):
                           dsp.DATA_LENGTH * dsp.WORD_LENGTH)
 
         # Make sure DSP isn't running for this operation
-        adau145x.Adau145x.kill_dsp()
-        adau145x.Adau145x.write_memory(dsp.DATA_ADDR, memory)
+        SigmaTCPHandler._kill_dsp()
+        SigmaTCPHandler.spi.write(dsp.DATA_ADDR, memory)
         # Restart the core
-        adau145x.Adau145x.start_dsp()
+        SigmaTCPHandler._start_dsp()
 
     @staticmethod
     def get_memory_block(addr, length):
-        return adau145x.Adau145x.get_memory_block(addr, length)
+        block_size = 2048
+
+        dsp = SigmaTCPHandler.dsp
+
+        logging.debug("reading %s bytes from memory",
+                      length * dsp.WORD_LENGTH)
+
+        # Must kill the core to read program memory, but it doesn't
+        # hurt doing it also for other memory types :(
+        SigmaTCPHandler._kill_dsp()
+
+        memory = bytearray()
+
+        while len(memory) < length * dsp.WORD_LENGTH:
+            logging.debug("reading memory code block from addr %s", addr)
+            data = SigmaTCPHandler.spi.read(addr, block_size)
+            # logging.debug("%s", data)
+            memory += data
+            addr = addr + int(block_size / dsp.WORD_LENGTH)
+
+        # Restart the core
+        SigmaTCPHandler._start_dsp()
+
+        return memory[0:length * dsp.WORD_LENGTH]
 
     @staticmethod
-    def get_program_memory():
+    def get_program_memory(erased=False):
         '''
-        Get the program memory from the DSP
+        Calculate a checksum of the program memory of the DSP
         '''
-        return adau145x.Adau145x.get_program_memory()
+        dsp = SigmaTCPHandler.dsp
+        memory = SigmaTCPHandler.get_memory_block(dsp.PROGRAM_ADDR,
+                                                  dsp.PROGRAM_LENGTH)
 
+        end_index = memory.find(dsp.PROGRAM_END_SIGNATURE)
+
+        if end_index < 0:
+            memsum = 0
+            for i in memory:
+                memsum = memsum + i
+
+            if (memsum > 0):
+                if erased:
+                    logging.error(f"program memory should be erased but we found data, memsum={memsum}")
+                    return None
+                else:
+                    logging.error("couldn't find program end signature," +
+                                " using full program memory")
+                end_index = dsp.PROGRAM_LENGTH - dsp.WORD_LENGTH
+            else:
+                if erased:
+                    logging.info("program memory appears to be properly erased")
+                else:
+                    logging.error("SPI returned only zeros - communication"
+                                "error")
+                    return None
+        else:
+            if erased:
+                logging.error(f"program memory should be erased but we found end signature at {end_index}")
+                return None
+            end_index = end_index + len(dsp.PROGRAM_END_SIGNATURE)
+
+        if not erased:
+            logging.debug("Program lengths = %s words",
+                        end_index / dsp.WORD_LENGTH)
+
+        # logging.debug("%s", memory[0:end_index])
+        return memory[0:end_index]
+
+    @staticmethod
+    def erase_program_memory():
+        addr = SigmaTCPHandler.dsp.PROGRAM_ADDR
+        remain = SigmaTCPHandler.dsp.PROGRAM_LENGTH * SigmaTCPHandler.dsp.WORD_LENGTH
+        
+        logging.info("resetting eeprom prog data")
+        
+        buf = bytearray(2048)
+        for i in range(0, len(buf)):
+            buf[i] = 0x00
+        
+        while remain > 0:
+            if remain < len(buf):
+                buf = bytearray(remain)
+                
+            logging.info(f"erasing {len(buf)} bytes starting at addr {hex(addr)}")
+            
+            SigmaTCPHandler.spi.write(addr, buf, True)
+            addr += len(buf)
+            remain -= len(buf)
+        
+        logging.info("prog data erased, verifying")
+        
+        prog_data = SigmaTCPHandler.get_program_memory(erased=True)
+        
+        if prog_data == None:
+            logging.error("EEPROM erase failed, program memory is not empty")
+            return None
+        else:
+            return (SigmaTCPHandler.dsp.PROGRAM_ADDR, SigmaTCPHandler.dsp.PROGRAM_LENGTH * SigmaTCPHandler.dsp.WORD_LENGTH)
+        
     @staticmethod
     def get_data_memory():
         '''
-        Get the data memory from the DSP
+        Calculate a checksum of the program memory of the DSP
         '''
-        return adau145x.Adau145x.get_data_memory()
+        dsp = SigmaTCPHandler.dsp
+        memory = SigmaTCPHandler.get_memory_block(dsp.DATA_ADDR,
+                                                  dsp.DATA_LENGTH)
+        logging.debug("Data lengths = %s words",
+                      dsp.DATA_LENGTH / dsp.WORD_LENGTH)
+
+        # logging.debug("%s", memory[0:end_index])
+        return memory[0:dsp.DATA_LENGTH]
 
     @staticmethod
-    def program_checksum(cached=True):
-        return adau145x.Adau145x.calculate_program_checksum(cached=cached)
+    def program_checksum(cached=False):
+        
+        if cached and SigmaTCPHandler.checksum is not None:
+            logging.debug("using cached program checksum, "
+                          "might not always be correct")
+            return SigmaTCPHandler.checksum
+
+        data = SigmaTCPHandler.get_program_memory()
+        m = hashlib.md5()
+        try:
+            m.update(data)
+        except:
+            logging.error("Can't calculate checksum from %s", data)
+            return None
+
+        logging.debug("length: %s, digest: %s", len(data), m.digest())
+
+        logging.info("caching program memory checksum")
+        SigmaTCPHandler.checksum = m.digest()
+        return SigmaTCPHandler.checksum
 
     @staticmethod
     def _list_str(int_list):
@@ -750,11 +711,36 @@ class SigmaTCPHandler(BaseRequestHandler):
 
     @staticmethod
     def _kill_dsp():
-        adau145x.Adau145x.kill_dsp()
+        logging.debug("killing DSP core")
+        dsp = SigmaTCPHandler.dsp
+        spi = SigmaTCPHandler.spi
+
+        spi.write(dsp.HIBERNATE_REGISTER,
+                  int_data(1, dsp.REGISTER_WORD_LENGTH))
+        time.sleep(0.0001)
+        spi.write(dsp.KILLCORE_REGISTER,
+                  int_data(0, dsp.REGISTER_WORD_LENGTH))
+        time.sleep(0.0001)
+        spi.write(dsp.KILLCORE_REGISTER,
+                  int_data(1, dsp.REGISTER_WORD_LENGTH))
 
     @staticmethod
     def _start_dsp():
-        adau145x.Adau145x.start_dsp()
+        logging.debug("starting DSP core")
+        dsp = SigmaTCPHandler.dsp
+        spi = SigmaTCPHandler.spi
+
+        spi.write(dsp.KILLCORE_REGISTER,
+                  int_data(0, dsp.REGISTER_WORD_LENGTH))
+        time.sleep(0.0001)
+        spi.write(dsp.STARTCORE_REGISTER,
+                  int_data(0, dsp.REGISTER_WORD_LENGTH))
+        time.sleep(0.0001)
+        spi.write(dsp.STARTCORE_REGISTER,
+                  int_data(1, dsp.REGISTER_WORD_LENGTH))
+        time.sleep(0.0001)
+        spi.write(dsp.HIBERNATE_REGISTER,
+                  int_data(0, dsp.REGISTER_WORD_LENGTH))
 
     @staticmethod
     def store_parameters(checksum, memory):
@@ -778,16 +764,6 @@ class SigmaTCPHandler(BaseRequestHandler):
         Call this method if the DSP program might change soon
         '''
         logging.info("preparing for memory update")
-        adau145x.Adau145x.clear_checksum_cache()
-        
-        # Also clear REST API checksum cache
-        try:
-            from hifiberrydsp.api.restapi import clear_checksum_cache
-            clear_checksum_cache()
-        except ImportError:
-            # REST API might not be available
-            pass
-            
         SigmaTCPHandler.checksum = None
         SigmaTCPHandler.update_alsasync(clear=True)
         SigmaTCPHandler.update_lgsoundsync(clear=True)
@@ -841,408 +817,6 @@ class SigmaTCPHandler(BaseRequestHandler):
         spdifr = datatools.parse_int(spdifreg)
         SigmaTCPHandler.lgsoundsync.set_registers(volr, spdifr)
 
-    @staticmethod
-    def load_and_apply_filters(type="sha1"):
-        """
-        Automatically load and apply stored filters for the current DSP profile checksum
-        
-        Args:
-            type (str): Checksum type to use - "sha1" (length-based, default) or "md5" (signature-based)
-        """
-        try:
-            # Validate checksum type parameter
-            if type not in ["md5", "sha1"]:
-                logging.error(f"Invalid checksum type '{type}'. Must be 'md5' or 'sha1'")
-                return False
-            
-            # Get current DSP program checksum based on type
-            if type == "md5":
-                # MD5 with signature-based detection (legacy compatibility)
-                checksum_bytes = adau145x.Adau145x.calculate_program_checksum(cached=True)
-                if not checksum_bytes:
-                    logging.warning("Could not get DSP program MD5 checksum for filter autoloading")
-                    return False
-                checksum_hex = binascii.hexlify(checksum_bytes).decode('utf-8').upper()
-                logging.info(f"Autoloading filters for DSP profile MD5 checksum (signature-based): {checksum_hex}")
-            else:  # type == "sha1"
-                # SHA-1 with length-based detection (modern approach)
-                checksums = adau145x.Adau145x.calculate_program_checksums(mode="length", algorithms=["sha1"], cached=True)
-                if not checksums or "sha1" not in checksums:
-                    logging.warning("Could not get DSP program SHA-1 checksum for filter autoloading")
-                    return False
-                checksum_hex = checksums["sha1"]
-                logging.info(f"Autoloading filters for DSP profile SHA-1 checksum (length-based): {checksum_hex}")
-            
-            # Initialize settings store for direct access
-            settings_store = SettingsStore()
-            
-            # Get stored filters and memory settings for this checksum
-            filters = settings_store.load_filters(checksum_hex)
-            memory_settings = settings_store.load_memory_settings(checksum_hex)
-            
-            total_settings = len(filters) + len(memory_settings)
-            if total_settings == 0:
-                logging.info(f"No stored settings found for checksum {checksum_hex}")
-                return True
-                
-            logging.info(f"Found {len(filters)} filters and {len(memory_settings)} memory settings for current profile")
-            
-            # Get the XML profile to resolve metadata keys if needed
-            xml_profile = SigmaTCPHandler.get_checked_xml()
-            
-            settings_applied = 0
-            
-            # First apply memory settings
-            for memory_address, memory_data in memory_settings.items():
-                try:
-                    success = SigmaTCPHandler._apply_memory_setting_new(memory_address, memory_data)
-                    if success:
-                        settings_applied += 1
-                        logging.debug(f"Applied memory setting at {memory_address}")
-                    else:
-                        logging.warning(f"Failed to apply memory setting at {memory_address}")
-                except Exception as e:
-                    logging.error(f"Error applying memory setting {memory_address}: {str(e)}")
-                    continue
-            
-            # Then apply filter settings
-            for filter_key, filter_data in filters.items():
-                try:
-                    # This is a regular filter
-                    address = filter_data.get("address")
-                    offset = filter_data.get("offset", 0)
-                    is_bypassed = filter_data.get("bypassed", False)
-                    filter_spec = filter_data.get("filter", {})
-                    
-                    if not address or not filter_spec:
-                        logging.warning(f"Skipping invalid filter {filter_key}: missing address or filter data")
-                        continue
-                    
-                    # Resolve address from metadata if it's a string key
-                    base_address = None
-                    if isinstance(address, str) and not address.startswith('0x') and not address.isdigit():
-                        # Try to resolve from metadata
-                        if xml_profile:
-                            metadata_value = xml_profile.get_meta(address)
-                            if metadata_value and '/' in str(metadata_value):
-                                # Parse biquad format like "addr/offset"
-                                parts = str(metadata_value).split('/')
-                                try:
-                                    base_address = int(parts[0])
-                                except ValueError:
-                                    logging.warning(f"Could not parse address from metadata key {address}: {metadata_value}")
-                                    continue
-                            else:
-                                logging.warning(f"Could not resolve address from metadata key {address}")
-                                continue
-                        else:
-                            logging.warning(f"No XML profile available to resolve metadata key {address}")
-                            continue
-                    else:
-                        # Direct address
-                        try:
-                            base_address = int(address, 0)  # Supports hex and decimal
-                        except ValueError:
-                            logging.warning(f"Could not parse direct address {address}")
-                            continue
-                    
-                    # Calculate actual address with offset
-                    actual_address = base_address + (offset * 5)
-                    
-                    # Check if address is valid
-                    if not adau145x.Adau145x.is_valid_memory_address(actual_address) or \
-                       not adau145x.Adau145x.is_valid_memory_address(actual_address + 4):
-                        logging.warning(f"Skipping filter {filter_key}: invalid memory address range {hex(actual_address)}")
-                        continue
-                    
-                    # Apply the filter (original or bypass based on state)
-                    if is_bypassed:
-                        # Apply bypass filter
-                        success = SigmaTCPHandler._apply_bypass_filter(actual_address)
-                        filter_type = "bypassed"
-                    else:
-                        # Apply original filter
-                        success = SigmaTCPHandler._apply_filter(actual_address, filter_spec)
-                        filter_type = "active"
-                    
-                    if success:
-                        settings_applied += 1
-                        logging.debug(f"Applied {filter_type} filter {filter_key} at address {hex(actual_address)}")
-                    else:
-                        logging.warning(f"Failed to apply filter {filter_key} at address {hex(actual_address)}")
-                        
-                except Exception as e:
-                    logging.error(f"Error applying filter {filter_key}: {str(e)}")
-                    continue
-            
-            logging.info(f"Successfully applied {settings_applied} out of {total_settings} stored settings ({len(memory_settings)} memory + {len(filters)} filters)")
-            return settings_applied > 0
-            
-        except Exception as e:
-            logging.error(f"Error during filter autoloading: {str(e)}")
-            return False
-    
-    @staticmethod
-    def _apply_memory_setting(setting_key, setting_data):
-        """
-        Apply a memory setting from the filter store
-        
-        Args:
-            setting_key (str): The setting key 
-            setting_data (dict): The setting data containing address and values
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            filter_spec = setting_data.get("filter", {})
-            if filter_spec.get("type") != "memory":
-                return False
-            
-            # Extract memory setting information
-            address_str = filter_spec.get("address")
-            values = filter_spec.get("values", [])
-            
-            if not address_str or not values:
-                logging.warning(f"Memory setting {setting_key} missing address or values")
-                return False
-            
-            # Parse address (same logic as REST API)
-            try:
-                address = int(address_str, 0)  # Auto-detect hex/decimal
-            except ValueError:
-                logging.warning(f"Could not parse address {address_str} for memory setting {setting_key}")
-                return False
-            
-            # Validate address range
-            if not adau145x.Adau145x.is_valid_memory_address(address):
-                logging.warning(f"Invalid address {hex(address)} for memory setting {setting_key}")
-                return False
-            
-            # Apply each value
-            success_count = 0
-            for i, value in enumerate(values):
-                current_addr = address + i
-                
-                if not adau145x.Adau145x.is_valid_memory_address(current_addr):
-                    logging.warning(f"Invalid address {hex(current_addr)} in memory setting {setting_key}")
-                    continue
-                
-                try:
-                    # Convert value to int (same logic as REST API)
-                    if isinstance(value, str) and value.startswith("0x"):
-                        int_value = int(value, 16)  # Hexadecimal
-                    elif isinstance(value, (float, int)):
-                        if isinstance(value, float):
-                            int_value = adau145x.Adau145x.decimal_repr(value)  # Convert float to fixed-point
-                        else:
-                            int_value = value
-                    else:
-                        logging.warning(f"Unsupported value type {type(value)} in memory setting {setting_key}")
-                        continue
-                    
-                    # Write to DSP memory
-                    byte_data = adau145x.Adau145x.int_data(int_value, 4)
-                    adau145x.Adau145x.write_memory(current_addr, byte_data)
-                    success_count += 1
-                    
-                except Exception as e:
-                    logging.warning(f"Error writing value {value} to address {hex(current_addr)}: {str(e)}")
-                    continue
-            
-            if success_count > 0:
-                logging.debug(f"Applied memory setting {setting_key}: {success_count}/{len(values)} values written to address {hex(address)}")
-                return True
-            else:
-                logging.warning(f"No values successfully written for memory setting {setting_key}")
-                return False
-                
-        except Exception as e:
-            logging.error(f"Error applying memory setting {setting_key}: {str(e)}")
-            return False
-
-    @staticmethod
-    def _apply_memory_setting_new(memory_address, memory_data):
-        """
-        Apply a memory setting from the new settings store structure
-        
-        Args:
-            memory_address (str): The memory address key
-            memory_data (dict): The memory data containing address and values
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            # Extract memory setting information from new structure
-            address_str = memory_data.get("address")
-            values = memory_data.get("values", [])
-            
-            if not address_str or not values:
-                logging.warning(f"Memory setting at {memory_address} missing address or values")
-                return False
-            
-            # Parse address (same logic as REST API)
-            try:
-                address = int(address_str, 0)  # Auto-detect hex/decimal
-            except ValueError:
-                logging.warning(f"Could not parse address {address_str} for memory setting at {memory_address}")
-                return False
-            
-            # Validate address range
-            if not adau145x.Adau145x.is_valid_memory_address(address):
-                logging.warning(f"Invalid address {hex(address)} for memory setting at {memory_address}")
-                return False
-            
-            # Apply each value
-            success_count = 0
-            for i, value in enumerate(values):
-                current_addr = address + i
-                
-                if not adau145x.Adau145x.is_valid_memory_address(current_addr):
-                    logging.warning(f"Invalid address {hex(current_addr)} in memory setting at {memory_address}")
-                    continue
-                
-                try:
-                    # Convert value to int (same logic as REST API)
-                    if isinstance(value, str) and value.startswith("0x"):
-                        int_value = int(value, 16)  # Hexadecimal
-                    elif isinstance(value, (float, int)):
-                        if isinstance(value, float):
-                            int_value = adau145x.Adau145x.decimal_repr(value)  # Convert float to fixed-point
-                        else:
-                            int_value = value
-                    else:
-                        logging.warning(f"Unsupported value type {type(value)} in memory setting at {memory_address}")
-                        continue
-                    
-                    # Write to DSP memory
-                    byte_data = adau145x.Adau145x.int_data(int_value, 4)
-                    adau145x.Adau145x.write_memory(current_addr, byte_data)
-                    success_count += 1
-                    
-                except Exception as e:
-                    logging.warning(f"Error writing value {value} to address {hex(current_addr)}: {str(e)}")
-                    continue
-            
-            if success_count > 0:
-                logging.debug(f"Applied memory setting at {memory_address}: {success_count}/{len(values)} values written to address {hex(address)}")
-                return True
-            else:
-                logging.warning(f"No values successfully written for memory setting at {memory_address}")
-                return False
-                
-        except Exception as e:
-            logging.error(f"Error applying memory setting at {memory_address}: {str(e)}")
-            return False
-
-    @staticmethod
-    def _apply_filter(address, filter_spec):
-        """
-        Apply a single filter at the specified address
-        
-        Args:
-            address (int): Memory address to write the filter to
-            filter_spec (dict): Filter specification
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            # Check if this is direct coefficients or a filter specification
-            if all(k in filter_spec for k in ['a0', 'a1', 'a2', 'b0', 'b1', 'b2']):
-                # Direct coefficients
-                a0 = float(filter_spec['a0'])
-                a1 = float(filter_spec['a1']) 
-                a2 = float(filter_spec['a2'])
-                b0 = float(filter_spec['b0'])
-                b1 = float(filter_spec['b1'])
-                b2 = float(filter_spec['b2'])
-                
-                # Create and write biquad
-                bq = Biquad(a0, a1, a2, b0, b1, b2, "Autoloaded filter")
-                adau145x.Adau145x.write_biquad(address, bq)
-                return True
-                
-            elif 'type' in filter_spec:
-                # Filter specification - need to calculate coefficients
-                # This requires importing Filter class and sample rate
-                try:
-                    from hifiberrydsp.api.filters import Filter
-                    import json
-                    
-                    # Get sample rate from profile or guess it
-                    sample_rate = 48000  # Default fallback
-                    try:
-                        xml_profile = SigmaTCPHandler.get_checked_xml()
-                        if xml_profile:
-                            sample_rate = xml_profile.samplerate() or 48000
-                    except:
-                        # Try to guess from DSP
-                        try:
-                            sample_rate = adau145x.Adau145x.guess_samplerate() or 48000
-                        except:
-                            pass
-                    
-                    # Create filter object
-                    filter_json = json.dumps(filter_spec)
-                    filter_obj = Filter.fromJSON(filter_json)
-                    
-                    # Calculate coefficients
-                    coeffs = filter_obj.biquadCoefficients(sample_rate)
-                    if not coeffs or len(coeffs) != 6:
-                        logging.error("Invalid coefficients returned from filter")
-                        return False
-                    
-                    # Extract coefficients (Filter returns b0,b1,b2,a0,a1,a2)
-                    b0, b1, b2, a0, a1, a2 = coeffs
-                    
-                    # Create and write biquad
-                    description = f"{filter_spec.get('type', 'Filter')} at {filter_spec.get('f', '')}Hz"
-                    bq = Biquad(a0, a1, a2, b0, b1, b2, description)
-                    adau145x.Adau145x.write_biquad(address, bq)
-                    return True
-                    
-                except Exception as e:
-                    logging.error(f"Error processing filter specification: {str(e)}")
-                    return False
-            else:
-                logging.error("Invalid filter format: expected direct coefficients or filter specification")
-                return False
-                
-        except Exception as e:
-            logging.error(f"Error applying filter at address {hex(address)}: {str(e)}")
-            return False
-    
-    @staticmethod
-    def _apply_bypass_filter(address):
-        """
-        Apply a bypass filter at the specified address
-        
-        Args:
-            address (int): Memory address to write the bypass filter to
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            # Create bypass filter (unity coefficients)
-            from hifiberrydsp.api.filters import Bypass
-            bypass_filter = Bypass()
-            coeffs = bypass_filter.biquadCoefficients(48000)  # Sample rate doesn't matter for bypass
-            
-            # Extract coefficients (Filter returns b0,b1,b2,a0,a1,a2)
-            b0, b1, b2, a0, a1, a2 = coeffs
-            
-            # Create and write bypass biquad
-            bq = Biquad(a0, a1, a2, b0, b1, b2, "Autoloaded bypass filter")
-            adau145x.Adau145x.write_biquad(address, bq)
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error applying bypass filter at address {hex(address)}: {str(e)}")
-            return False
-
 
 class ProgramRefresher(Thread):
 
@@ -1255,17 +829,6 @@ class ProgramRefresher(Thread):
         # update volume register for ALSA control
         SigmaTCPHandler.update_alsasync()
         SigmaTCPHandler.update_lgsoundsync()
-        
-        # Autoload filters for the new profile if enabled
-        if SigmaTCPHandler.autoload_filters:
-            try:
-                logging.info("Reloading stored filters after DSP program update")
-                SigmaTCPHandler.load_and_apply_filters()
-            except Exception as e:
-                logging.error(f"Error reloading filters after update: {str(e)}")
-        else:
-            logging.debug("Filter autoloading disabled")
-        
         SigmaTCPHandler.updating = False
         if this.notify_on_updates is not None:
             r = requests.post(this.notify_on_updates)
@@ -1296,19 +859,14 @@ class SigmaTCPServerMain():
         self.restore = False
         self.abort = False
         self.zeroconf = None
-
+        self.erase = False
+        
         params = self.parse_config()
 
-        # Determine the host to bind to
-        if params["bind_address"]:
-            bind_host = params["bind_address"]
-        elif params["localhost"]:
-            bind_host = "localhost"
+        if params["localhost"]:
+            self.server = SigmaTCPServer(server_address=("localhost", DEFAULT_PORT))
         else:
-            bind_host = "0.0.0.0"
-
-        logging.info(f"Starting SigmaTCP server on {bind_host}:{DEFAULT_PORT}")
-        self.server = SigmaTCPServer(server_address=(bind_host, DEFAULT_PORT))
+            self.server = SigmaTCPServer()
 
         if params["alsa"]:
             logging.info("initializing ALSA mixer control %s", alsa_mixer_name)
@@ -1344,69 +902,102 @@ class SigmaTCPServerMain():
 
         if params["restore"]:
             self.restore = True
-
-        # Set the autoload filters flag
-        SigmaTCPHandler.autoload_filters = not params.get("no_autoload_filters", False)
         
-        # Set the debug memory writes flag
-        SigmaTCPHandler.debug_memory_writes = params.get("debug", False)
-        if SigmaTCPHandler.debug_memory_writes:
-            logging.info("Debug mode enabled: will log all DSP memory writes")
+        if params["erase"]:
+            self.erase = True
 
-        self.params = params
         
     def parse_config(self):
         config = configparser.ConfigParser()
         config.optionxform = lambda option: option
-
+    
         config.read("/etc/sigmatcp.conf")
 
         params = {}
+    
+        try:
+            params["alsa"] = config.getboolean("server","alsa")
+        except:
+            params["alsa"] = False
+            
+        if  "--alsa" in sys.argv:
+            params["alsa"] = True
 
-        # Parse command-line arguments
-        parser = argparse.ArgumentParser(description="SigmaTCP Server")
-        parser.add_argument("--alsa", action="store_true", help="Enable ALSA volume control")
-        parser.add_argument("--lgsoundsync", action="store_true", help="Enable LG Sound Sync")
-        parser.add_argument("--enable-rest", action="store_true", help="Enable REST API server")
-        parser.add_argument("--disable-tcp", action="store_true", help="Disable SigmaTCP server (only useful with --enable-rest)")
-        parser.add_argument("--store", action="store_true", help="Store data memory to a file on exit")
-        parser.add_argument("--restore", action="store_true", help="Restore saved data memory")
-        parser.add_argument("--localhost", action="store_true", help="Bind to localhost only")
-        parser.add_argument("--bind-address", type=str, default=None, help="Specify IP address to bind to")
-        parser.add_argument("--no-autoload-filters", action="store_true", help="Disable automatic loading of stored filters on startup")
-        parser.add_argument("--debug", action="store_true", help="Enable debug logging for all DSP memory writes")
-        parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
-        args = parser.parse_args()
-
-        params["alsa"] = args.alsa
-        params["lgsoundsync"] = args.lgsoundsync
-        params["enable_rest"] = args.enable_rest
-        params["disable_tcp"] = args.disable_tcp
-        params["store"] = args.store
-        params["restore"] = args.restore
-        params["verbose"] = args.verbose
-        params["localhost"] = args.localhost
-        params["bind_address"] = args.bind_address
-        params["no_autoload_filters"] = args.no_autoload_filters
-        params["debug"] = args.debug
+        try:            
+            params["lgsoundsync"] = config.getboolean("server","lgsoundsync") 
+        except:
+            params["lgsoundsync"] = False
+            
+        if "--lgsoundsync" in sys.argv:
+            params["lgsoundsync"] = True
+            
+        if "--localhost" in sys.argv:
+            params["localhost"] = True
+        else:
+            params["localhost"] = False
 
         try:
-            this.command_after_startup = config.get("server", "command_after_startup")
+            this.command_after_startup = config.get("server","command_after_startup")
         except:
             this.command_after_startup = None
 
-        try:
-            this.notify_on_updates = config.get("server", "notify_on_updates")
+        try:            
+            this.notify_on_updates = config.get("server","notify_on_updates") 
         except:
             this.notify_on_updates = None
+            
 
-        # Override any previous logging configuration
-        logging.basicConfig(level=logging.DEBUG if params["verbose"] else logging.INFO, force=True)
 
+        if "--restore" in sys.argv:
+            params["restore"] = True
+        else:
+            params["restore"] = False
+            
+        if "--erase" in sys.argv:
+            params["erase"] = True
+        else:
+            params["erase"] = False
+            
         return params
             
+
+#     def announce_zeroconf(self):
+#         desc = {'name': 'SigmaTCP',
+#                 'vendor': 'HiFiBerry',
+#                 'version': hifiberrydsp.__version__}
+#         hostname = socket.gethostname()
+#         try:
+#             ip = socket.gethostbyname(hostname)
+#         except Exception:
+#             logging.error("can't get IP for hostname %s, "
+#                           "not initialising Zeroconf",
+#                           hostname)
+#             return
+# 
+#         self.zeroconf_info = ServiceInfo(ZEROCONF_TYPE,
+#                                          "{}.{}".format(
+#                                              hostname, ZEROCONF_TYPE),
+#                                          socket.inet_aton(ip),
+#                                          DEFAULT_PORT, 0, 0, desc)
+#         self.zeroconf = Zeroconf()
+#         self.zeroconf.register_service(self.zeroconf_info)
+# 
+#     def shutdown_zeroconf(self):
+#         if self.zeroconf is not None and self.zeroconf_info is not None:
+#             self.zeroconf.unregister_service(self.zeroconf_info)
+# 
+#             self.zeroconf_info = None
+#             self.zeroconf.close()
+#             self.zeroconf = None
+
     def run(self):
         
+        if self.erase:
+            logging.info("erasing EEPROM program memory")
+            SigmaTCPHandler.erase_program_memory()
+            logging.info("EEPROM program memory erased, exiting")
+            return
+            
         # Check if a DSP is detected
         dsp_detected = adau145x.Adau145x.detect_dsp()
         if dsp_detected:
@@ -1415,12 +1006,8 @@ class SigmaTCPServerMain():
         else:
             logging.info("did not detect ADAU14xx DSP")
             this.dsp=""
-        
-        # Find and restore correct DSP profile if needed
-        if dsp_detected:
-            logging.info("Checking DSP profile integrity...")
-            find_and_restore_dsp_profile()
             
+        
         if (self.restore):
             try:
                 logging.info("restoring saved data memory")
@@ -1429,15 +1016,12 @@ class SigmaTCPServerMain():
             except IOError:
                 logging.info("no saved data found")
 
-        # Autoload filters for the current profile unless disabled
-        if not self.params.get("no_autoload_filters", False):
-            logging.info("Autoloading stored filters for current DSP profile")
-            try:
-                SigmaTCPHandler.load_and_apply_filters()
-            except Exception as e:
-                logging.error(f"Error during filter autoloading: {str(e)}")
-        else:
-            logging.info("Filter autoloading disabled by --no-autoload-filters option")
+#         logging.info("announcing via zeroconf")
+#         try:
+#             self.announce_zeroconf()
+#         except Exception as e:
+#             logging.debug("exception while initialising Zeroconf")
+#             logging.exception(e)
 
         logging.debug("done")
         
@@ -1445,35 +1029,13 @@ class SigmaTCPServerMain():
         notifier_thread = Thread(target = startup_notify)
         notifier_thread.start()
         
-        if self.params.get("enable_rest"):
-            # Use the same bind address for REST API
-            if self.params.get("bind_address"):
-                rest_host = self.params.get("bind_address")
-            elif self.params.get("localhost"):
-                rest_host = "localhost"
-            else:
-                rest_host = "0.0.0.0"
-                
-            logging.info(f"Starting REST API server on {rest_host}:13141")
-            rest_thread = Thread(target=run_api, kwargs={"host": rest_host, "port": 13141})
-            rest_thread.daemon = True
-            rest_thread.start()
-
         try:
-            if not(self.abort) and not(self.params.get("disable_tcp")):
+            if not(self.abort):
                 logging.info("starting TCP server")
                 self.server.serve_forever()
-            elif self.params.get("disable_tcp") and self.params.get("enable_rest"):
-                logging.info("TCP server disabled, running REST API only")
-                # Keep main thread alive for REST API
-                while True:
-                    time.sleep(1)
-            else:
-                logging.warning("Both TCP server and REST API are disabled. Nothing to do!")
         except KeyboardInterrupt:
             logging.info("aborting ")
-            if not self.params.get("disable_tcp"):
-                self.server.server_close()
+            self.server.server_close()
 
         if SigmaTCPHandler.alsasync is not None:
             SigmaTCPHandler.alsasync.finish()
