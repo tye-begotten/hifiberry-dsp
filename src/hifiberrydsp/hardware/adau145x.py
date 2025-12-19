@@ -335,7 +335,7 @@ class Adau145x():
         return memory[0:length * Adau145x.WORD_LENGTH]
 
     @staticmethod
-    def get_program_len(max=False, erased=False):
+    def get_program_len(max=False):
         '''
         Read the program length from the DSP registers
         

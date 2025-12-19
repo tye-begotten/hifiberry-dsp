@@ -37,12 +37,15 @@ from hifiberrydsp.hardware.adau145x import Adau145x
 from hifiberrydsp.filtering.biquad import Biquad
 
 
+from hifiberrydsp.tyefi import *
+
+
 DEFAULT_PORT = 13141
 DEFAULT_HOST = "localhost"
-PROFILES_DIR = "/usr/share/hifiberry/dspprofiles"
+# PROFILES_DIR = "/usr/share/hifiberry/dspprofiles"
 
 # Initialize filter store
-settings_store = SettingsStore(PROFILES_DIR)
+settings_store = SettingsStore(DSP_PROFILES_DIR)
 
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
@@ -491,25 +494,25 @@ def list_dsp_profiles():
     print("=== DSP PROFILES ENDPOINT CALLED ===")
     try:
         # Check if directory exists
-        if not os.path.exists(PROFILES_DIR):
-            logging.error(f"Profiles directory {PROFILES_DIR} does not exist")
-            print(f"ERROR: Profiles directory {PROFILES_DIR} does not exist")
-            return jsonify({"error": f"Profiles directory {PROFILES_DIR} does not exist"}), 404
+        if not os.path.exists(DSP_PROFILES_DIR):
+            logging.error(f"Profiles directory {DSP_PROFILES_DIR} does not exist")
+            print(f"ERROR: Profiles directory {DSP_PROFILES_DIR} does not exist")
+            return jsonify({"error": f"Profiles directory {DSP_PROFILES_DIR} does not exist"}), 404
         
         # Get all XML files in the directory
         try:
-            files = os.listdir(PROFILES_DIR)
+            files = os.listdir(DSP_PROFILES_DIR)
             xml_files = [f for f in files if f.lower().endswith('.xml')]
             xml_files.sort()  # Sort alphabetically
             
             return jsonify({
                 "profiles": xml_files,
                 "count": len(xml_files),
-                "directory": PROFILES_DIR
+                "directory": DSP_PROFILES_DIR
             })
             
         except PermissionError:
-            return jsonify({"error": f"Permission denied accessing {PROFILES_DIR}"}), 403
+            return jsonify({"error": f"Permission denied accessing {DSP_PROFILES_DIR}"}), 403
         except Exception as e:
             return jsonify({"error": f"Error reading directory: {str(e)}"}), 500
             
@@ -527,18 +530,18 @@ def get_all_profiles_metadata():
     """
     try:
         # Check if directory exists
-        if not os.path.exists(PROFILES_DIR):
-            return jsonify({"error": f"Profiles directory {PROFILES_DIR} does not exist"}), 404
+        if not os.path.exists(DSP_PROFILES_DIR):
+            return jsonify({"error": f"Profiles directory {DSP_PROFILES_DIR} does not exist"}), 404
         
         # Get all XML files in the directory
         try:
-            files = os.listdir(PROFILES_DIR)
+            files = os.listdir(DSP_PROFILES_DIR)
             xml_files = [f for f in files if f.lower().endswith('.xml')]
             
             profiles_metadata = {}
             
             for filename in xml_files:
-                filepath = os.path.join(PROFILES_DIR, filename)
+                filepath = os.path.join(DSP_PROFILES_DIR, filename)
                 try:
                     # Load the XML profile
                     xml_profile = XmlProfile(filepath)
@@ -573,11 +576,11 @@ def get_all_profiles_metadata():
             return jsonify({
                 "profiles": profiles_metadata,
                 "count": len(xml_files),
-                "directory": PROFILES_DIR
+                "directory": DSP_PROFILES_DIR
             })
             
         except PermissionError:
-            return jsonify({"error": f"Permission denied accessing {PROFILES_DIR}"}), 403
+            return jsonify({"error": f"Permission denied accessing {DSP_PROFILES_DIR}"}), 403
         except Exception as e:
             return jsonify({"error": f"Error reading directory: {str(e)}"}), 500
             

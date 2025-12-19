@@ -29,9 +29,6 @@ from collections import OrderedDict
 from hifiberrydsp.hardware.adau145x import Adau145x
 from hifiberrydsp.datatools import parse_int_length
 
-from ty3.core.env import Envars
-from ty3.core.fs import *
-
 ATTRIBUTE_CHECKSUM = "checksum"
 ATTRIBUTE_CHECKSUM_SHA1 = "checksum_sha1"
 ATTRIBUTE_VOL_CTL = "volumeControlRegister"
@@ -98,9 +95,8 @@ MEMTYPE = {
 }
 
 
-TYEFI_ROOT = os.environ["TYEFI_ROOT"]
-cfg = Envars(f"{TYEFI_ROOT}/tyefi.env")
-file_store_root = path(cfg.get("DSP_FILE_STORE_ROOT", f"{TYEFI_ROOT}/bin/dsp"))
+from hifiberrydsp.tyefi import *
+
 
 
 def replace_in_memory_block(data, startaddr, replace_dict):
@@ -140,7 +136,7 @@ def get_default_dspprofile_path():
     Returns:
         str: Path to the default DSP profile file
     """
-    return file_store_root["dspprogram.xml"].absolute
+    return FILE_STORE_ROOT["dspprogram.xml"].absolute
     
     # if (os.geteuid() == 0):
     #     logging.info(

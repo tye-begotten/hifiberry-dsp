@@ -23,7 +23,7 @@ import logging
 from hifiberrydsp.server.sigmatcp import SigmaTCPServer
 
 if __name__ == "__main__":
-    if "-v" in sys.argv:
+    if "-v" in sys.argv or "--verbose" in sys.argv:
         print("Enabling debug logging")
         logging.basicConfig(level=logging.DEBUG)
     else:

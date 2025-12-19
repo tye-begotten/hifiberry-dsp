@@ -27,6 +27,10 @@ import time
 import fcntl
 
 
+from hifiberrydsp.tyefi import *
+
+
+
 class SettingsStore:
     """
     Manages the DSP settings store for DSP profiles.
@@ -57,7 +61,7 @@ class SettingsStore:
     }
     """
     
-    def __init__(self, profiles_dir="/usr/share/hifiberry/dspprofiles"):
+    def __init__(self, profiles_dir="/home/tye/src/tyefi/dsp/profiles"):
         """
         Initialize the SettingsStore
         
@@ -65,7 +69,7 @@ class SettingsStore:
             profiles_dir (str): Directory where DSP profiles are stored (kept for compatibility)
         """
         self.profiles_dir = profiles_dir
-        self.store_file = "/var/lib/hifiberry/dspsettings.json"
+        self.store_file = DSP_SETTINGS_FILE.absolute
     
     def load_store(self):
         """
