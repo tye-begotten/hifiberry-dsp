@@ -369,7 +369,7 @@ class Adau145x():
         return program_length
     
     @staticmethod
-    def get_program_memory(end="signature"):
+    def get_program_memory(end="signature", erased=False):
         '''
         Read the program memory from the DSP with different end detection modes
         
