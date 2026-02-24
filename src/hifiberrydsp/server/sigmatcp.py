@@ -74,6 +74,8 @@ this.notify_on_updates = None
 this.command_after_startup = None
 this.dsp=None
 
+DSP_PROFILES_DIRECTORY = DSP_PROFILES_DIR.absolute
+
 
 def parameterfile():
     return RUNTIME_DIR["dspparameters.dat"].absolute
