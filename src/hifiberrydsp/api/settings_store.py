@@ -69,7 +69,7 @@ class SettingsStore:
             profiles_dir (str): Directory where DSP profiles are stored (kept for compatibility)
         """
         self.profiles_dir = profiles_dir
-        self.store_file = DSP_SETTINGS_FILE.absolute
+        self.store_file = DSP_FILTER_STORE_FILE.absolute
     
     def load_store(self):
         """
